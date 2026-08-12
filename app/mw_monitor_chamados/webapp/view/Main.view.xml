@@ -1,0 +1,310 @@
+<mvc:View
+    height="100%"
+    controllerName="megawork.mwmonitorchamados.controller.Main"
+    xmlns="sap.m"
+    xmlns:mvc="sap.ui.core.mvc"
+    xmlns:tnt="sap.tnt"
+    xmlns:core="sap.ui.core"
+    xmlns:f="sap.f"
+    xmlns:card="sap.f.cards">
+    <tnt:ToolPage id="toolPage">
+        <tnt:header>
+            <tnt:ToolHeader>
+                <Button
+                    id="sideNavigationToggleButton"
+                    icon="sap-icon://menu2"
+                    type="Transparent"
+                    press=".onSideNavButtonPress"
+                    tooltip="{i18n>collapseMenuButtonText}">
+                    <layoutData>
+                        <OverflowToolbarLayoutData priority="NeverOverflow" />
+                    </layoutData>
+                </Button>
+                <ToolbarSpacer />
+                <!-- PROVISORIO (homologacao): ligado, o app ignora o usuario do shell e le o
+                     requisitante do EMAIL_LOCAL_DEV do Main.controller.js. Remover o botao e o
+                     handler antes de ir para producao. -->
+                <ToggleButton
+                    id="emailLocalButton"
+                    icon="sap-icon://person-placeholder"
+                    type="Transparent"
+                    press=".onAlternarEmailLocal"
+                    tooltip="{i18n>emailLocalTooltip}">
+                    <layoutData>
+                        <OverflowToolbarLayoutData priority="NeverOverflow" />
+                    </layoutData>
+                </ToggleButton>
+                <Button
+                    id="notificationButton"
+                    icon="sap-icon://bell"
+                    type="Transparent"
+                    press=".onNotificationPress"
+                    tooltip="{i18n>notificationButtonTooltip}">
+                    <layoutData>
+                        <OverflowToolbarLayoutData closeOverflowOnInteraction="false" />
+                    </layoutData>
+                </Button>
+            </tnt:ToolHeader>
+        </tnt:header>
+        <tnt:sideContent>
+            <tnt:SideNavigation
+                id="sideNavigation"
+                expanded="true"
+                selectedKey="home"
+                itemSelect=".onItemSelect">
+                <tnt:NavigationList id="navigationList">
+                    <tnt:NavigationListItem
+                        key="home"
+                        text="{i18n>sideContentHome}"
+                        icon="sap-icon://home" />
+                    <tnt:NavigationListItem
+                        key="criarChamado"
+                        text="{i18n>sideContentCreateTicket}"
+                        icon="sap-icon://add-document" />
+                    <tnt:NavigationListItem
+                        key="acompanharChamados"
+                        text="{i18n>sideContentTrackTickets}"
+                        icon="sap-icon://list" />
+                </tnt:NavigationList>
+            </tnt:SideNavigation>
+        </tnt:sideContent>
+        <tnt:mainContents>
+            <NavContainer id="mainContents" afterNavigate=".onAfterNavigate">
+                <pages>
+                    <Page id="home"
+                        showHeader="false"
+                        enableScrolling="false">
+                        <!-- Mesmo cabecalho do DetalheChamado: avatar + titulo + subtitulo
+                             numa unica barra do DynamicPageTitle, acao a direita. -->
+                        <f:DynamicPage
+                            id="cockpitDynamicPage"
+                            toggleHeaderOnTitleClick="false"
+                            class="sapUiResponsivePadding--title sapUiResponsivePadding--content">
+                            <f:title>
+                                <f:DynamicPageTitle id="cockpitPageTitle" areaShrinkRatio="2.2:1:0.1">
+                                    <f:heading>
+                                        <HBox id="cockpitHeaderBox" alignItems="Center" wrap="Wrap">
+                                            <VBox id="cockpitHeaderTextBox">
+                                                <Title id="cockpitTitle" text="Cockpit" level="H2"
+                                                    wrapping="true" />
+                                                <Text id="cockpitSubtitle"
+                                                    text="Visão geral do volume e da carga de chamados"
+                                                    class="sapUiTinyMarginTop" />
+                                            </VBox>
+                                        </HBox>
+                                    </f:heading>
+                                    <f:actions>
+                                        <Button id="cockpitRefreshButton" icon="sap-icon://refresh"
+                                            type="Transparent" tooltip="Atualizar"
+                                            press=".onRefreshCockpit" />
+                                    </f:actions>
+                                </f:DynamicPageTitle>
+                            </f:title>
+                            <f:content>
+                                <VBox id="cockpitContentBox" width="100%">
+                                    <FlexBox id="cockpitKpiFlexBox" wrap="Wrap" class="sapUiSmallMarginBottom" justifyContent="Center">
+                                        <f:Card id="cockpitTotalPanel" width="310px"
+                                            class="sapUiResponsiveMargin cockpitCard cockpitAccentNeutral">
+                                            <f:header>
+                                                <card:Header id="cockpitTotalHeader" title="Total de chamados"
+                                                    subtitle="Todos os períodos" subtitleMaxLines="1"
+                                                    iconSrc="sap-icon://activity-items" />
+                                            </f:header>
+                                            <f:content>
+                                                <VBox id="cockpitTotalBox" class="sapUiSmallMargin">
+                                                    <ObjectNumber id="cockpitTotalNumber" number="0"
+                                                        state="None" />
+                                                    <ObjectStatus id="cockpitTotalStatus"
+                                                        icon="sap-icon://alert" text=""
+                                                        state="Error" class="sapUiTinyMarginTop" />
+                                                </VBox>
+                                            </f:content>
+                                        </f:Card>
+
+                                        <f:Card id="cockpitOpenPanel" width="310px"
+                                            class="sapUiResponsiveMargin cockpitCard cockpitAccentWarning">
+                                            <f:header>
+                                                <card:Header id="cockpitOpenHeader" title="Em aberto"
+                                                    subtitle="Novo, atribuído ou com o cliente"
+                                                    subtitleMaxLines="1" iconSrc="sap-icon://inbox" />
+                                            </f:header>
+                                            <f:content>
+                                                <VBox id="cockpitOpenBox" class="sapUiSmallMargin">
+                                                    <ObjectNumber id="cockpitOpenNumber" number="0"
+                                                        state="Warning" />
+                                                    <ObjectStatus id="cockpitOpenStatus"
+                                                        icon="sap-icon://circle-task-2"
+                                                        text="" state="Warning"
+                                                        class="sapUiTinyMarginTop" />
+                                                </VBox>
+                                            </f:content>
+                                        </f:Card>
+
+                                        <f:Card id="cockpitInProgressPanel" width="310px"
+                                            class="sapUiResponsiveMargin cockpitCard cockpitAccentWarning">
+                                            <f:header>
+                                                <card:Header id="cockpitInProgressHeader" title="Em andamento"
+                                                    subtitle="Em tratamento ou homologação" subtitleMaxLines="1"
+                                                    iconSrc="sap-icon://synchronize" />
+                                            </f:header>
+                                            <f:content>
+                                                <VBox id="cockpitInProgressBox" class="sapUiSmallMargin">
+                                                    <ObjectNumber id="cockpitInProgressNumber" number="0"
+                                                        state="Warning" />
+                                                    <ObjectStatus id="cockpitInProgressStatus"
+                                                        icon="sap-icon://circle-task-2" text="1 não homologado"
+                                                        state="Error" class="sapUiTinyMarginTop" />
+                                                </VBox>
+                                            </f:content>
+                                        </f:Card>
+
+                                        <f:Card id="cockpitDonePanel" width="310px"
+                                            class="sapUiResponsiveMargin cockpitCard cockpitAccentSuccess">
+                                            <f:header>
+                                                <card:Header id="cockpitDoneHeader" title="Concluídos"
+                                                    subtitle="Chamados com status Fechado" subtitleMaxLines="1"
+                                                    iconSrc="sap-icon://complete" />
+                                            </f:header>
+                                            <f:content>
+                                                <VBox id="cockpitDoneBox" class="sapUiSmallMargin">
+                                                    <ObjectNumber id="cockpitDoneNumber" number="0"
+                                                        state="Success" />
+                                                    <ObjectStatus id="cockpitDoneStatus"
+                                                        icon="sap-icon://circle-task-2"
+                                                        text="Encerrados definitivamente" state="Success"
+                                                        class="sapUiTinyMarginTop" />
+                                                </VBox>
+                                            </f:content>
+                                        </f:Card>
+                                    </FlexBox>
+
+                                    <f:Card id="cockpitRecentPanel" class="sapUiSmallMarginTop cockpitCard mwCardDestaque">
+                                        <f:header>
+                                            <card:Header id="cockpitRecentHeader" title="Últimos chamados"
+                                                subtitle="Atividade mais recente" iconSrc="sap-icon://history" />
+                                        </f:header>
+                                        <f:content>
+                                            <!-- A seta e um core:Icon DENTRO do conteudo, nao o indicador padrao
+                                                 do UI5 (type="Navigation"). O ListItemBase renderiza esse indicador
+                                                 num slot a direita do conteudo, dentro do mesmo flex do <li>: com o
+                                                 conteudo em width="100%" o slot era empurrado para fora e cortado
+                                                 pelo overflow:hidden que o Horizon aplica em .sapFCardContent - a
+                                                 seta existia no DOM mas nunca aparecia. Como icone do conteudo ela
+                                                 fica sempre visivel. O min-width:0 do mwCockpitRecenteItem continua
+                                                 obrigatorio: e ele que deixa o titulo nowrap truncar em "..." em vez
+                                                 de estourar a linha e empurrar a seta de novo. -->
+                                            <List
+                                                id="cockpitRecentList"
+                                                showSeparators="All"
+                                                noDataText="Nenhum chamado em aberto"
+                                                class="mwListZebra"
+                                                items="{view>/cockpitRecentes}">
+                                                <CustomListItem type="Active" press=".onCockpitTicketPress">
+                                                    <HBox
+                                                        width="100%"
+                                                        alignItems="Center"
+                                                        justifyContent="SpaceBetween"
+                                                        class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop sapUiTinyMarginBottom">
+                                                        <VBox class="mwCockpitRecenteItem">
+                                                            <Text text="{view>intro}" class="sapUiTinyMarginBottom" />
+                                                            <Title text="{view>titulo}" level="H4" titleStyle="H5" class="sapUiTinyMarginBottom" />
+                                                            <Text text="{view>atributoTexto}" />
+                                                        </VBox>
+                                                        <core:Icon
+                                                            src="sap-icon://slim-arrow-right"
+                                                            size="1rem"
+                                                            color="Default"
+                                                            class="mwCockpitRecenteSeta sapUiSmallMarginBegin" />
+                                                    </HBox>
+                                                </CustomListItem>
+                                            </List>
+                                        </f:content>
+                                    </f:Card>
+                                </VBox>
+                            </f:content>
+                        </f:DynamicPage>
+                    </Page>
+                    <Page
+                        id="criarChamado"
+                        showHeader="false"
+                        enableScrolling="false"
+                        floatingFooter="false"
+                        busy="{= !${codelists>/clientes} || !${codelists>/clientes}.length }"
+                        busyIndicatorDelay="0"
+                        class="sapUiResponsivePadding--footer">
+                        <content>
+                            <core:Fragment
+                                fragmentName="megawork.mwmonitorchamados.view.CriarChamado"
+                                type="XML" />
+                        </content>
+                        <footer>
+                            <OverflowToolbar>
+                                <ToolbarSpacer />
+                                <Button
+                                    id="btnWizardVoltar"
+                                    text="{i18n>criarChamadoWizVoltar}"
+                                    icon="sap-icon://nav-back"
+                                    enabled="{view>/podeVoltar}"
+                                    press=".onWizardVoltar">
+                                    <layoutData>
+                                        <OverflowToolbarLayoutData priority="NeverOverflow" />
+                                    </layoutData>
+                                </Button>
+                                <Button
+                                    text="{i18n>criarChamadoCancelar}"
+                                    press=".onCancelarChamado" />
+                                <Button
+                                    id="btnWizardContinuar"
+                                    type="Emphasized"
+                                    text="{i18n>criarChamadoWizContinuar}"
+                                    icon="sap-icon://navigation-right-arrow"
+                                    iconFirst="false"
+                                    visible="{= ${view>/passoWizard} &lt; 4 }"
+                                    enabled="{view>/podeAvancar}"
+                                    press=".onWizardAvancar">
+                                    <layoutData>
+                                        <OverflowToolbarLayoutData priority="NeverOverflow" />
+                                    </layoutData>
+                                </Button>
+                                <Button
+                                    id="btnWizardFinalizar"
+                                    type="Emphasized"
+                                    icon="sap-icon://paper-plane"
+                                    text="{i18n>criarChamadoAbrir}"
+                                    visible="{= ${view>/passoWizard} === 4 }"
+                                    press=".onSubmitChamado">
+                                    <layoutData>
+                                        <OverflowToolbarLayoutData priority="NeverOverflow" />
+                                    </layoutData>
+                                </Button>
+                            </OverflowToolbar>
+                        </footer>
+                    </Page>
+                    <Page
+                        id="acompanharChamados"
+                        showHeader="false"
+                        class="sapUiResponsiveContentPadding">
+                        <content>
+                            <core:Fragment
+                                fragmentName="megawork.mwmonitorchamados.view.AcompanharChamados"
+                                type="XML" />
+                        </content>
+                    </Page>
+                    <!-- Filho de acompanharChamados: entra pela tabela (onTicketPress) ou pela lista
+                         de recentes do cockpit (onCockpitTicketPress) e sai pelo breadcrumb do
+                         fragment, que tambem faz o papel de cabecalho. -->
+                    <Page
+                        id="detalheChamado"
+                        showHeader="false"
+                        enableScrolling="false">
+                        <content>
+                            <core:Fragment
+                                fragmentName="megawork.mwmonitorchamados.view.DetalheChamado"
+                                type="XML" />
+                        </content>
+                    </Page>
+                </pages>
+            </NavContainer>
+        </tnt:mainContents>
+    </tnt:ToolPage>
+</mvc:View>

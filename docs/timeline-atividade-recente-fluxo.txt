@@ -1,0 +1,374 @@
+================================================================================
+TIMELINE "ATIVIDADE RECENTE" - COMO O FLUXO FUNCIONA HOJE
+================================================================================
+App:        app/mw_monitor_chamados (SAPUI5 / SAP Cloud for Customer - C4C)
+Documento:  descreve o estado ATUAL do codigo, ja com as 2 correcoes da secao 6.
+Atualizado: 2026-08-08
+Aviso:      numeros de linha valem para o codigo desta data. Se alguem editar os
+            arquivos, confira os nomes das funcoes - eles sao mais estaveis.
+
+
+--------------------------------------------------------------------------------
+1. RESUMO EM UMA FRASE
+--------------------------------------------------------------------------------
+A Timeline nao fala com a API. Ela binda em UM array do modelo JSON "tickets"
+(propriedade "historico" de cada chamado), e quem enche esse array sao TRES
+fontes distintas dentro do Main.controller.js.
+
+
+--------------------------------------------------------------------------------
+2. ONDE A TIMELINE ESTA E O QUE ELA LE
+--------------------------------------------------------------------------------
+Arquivo: app/mw_monitor_chamados/webapp/view/DetalheChamado.fragment.xml
+
+  linha 551  <suite:Timeline ... >
+  linha 554     busy="{= ${tickets>historicoCarregando} === true }"
+  linha 561     content="{tickets>historico}"      <-- UNICA fonte de dados
+  linha 562     <suite:TimelineItem ...>
+
+Cada TimelineItem le exatamente 4 chaves de cada objeto do array:
+
+  chave do objeto | propriedade do controle | formatter
+  ----------------|-------------------------|---------------------------
+  quando          | dateTime                | formatter.dataAbertura
+  autor           | title                   | (nenhum)
+  texto           | text                    | (nenhum, \n vira <br>)
+  sistema         | icon                    | formatter.historicoIcone
+
+A contagem no cabecalho do card (linha 545) usa o MESMO array, via
+formatter.contagem.
+
+IMPORTANTE: se um item do array nao tiver essas chaves, ele aparece em branco na
+tela - nao da erro. Sintoma tipico de mapeamento errado la no controller.
+
+
+--------------------------------------------------------------------------------
+3. O DESENHO GERAL (3 FONTES ESCREVEM NO MESMO ARRAY)
+--------------------------------------------------------------------------------
+
+                        modelo JSON "tickets"
+                   /Tickets/{n}/historico  (array)
+                              |
+        +---------------------+---------------------+
+        |                     |                     |
+    (1) ABERTURA          (2) C4C              (3) ACOES LOCAIS
+    _normalizarTickets    _lerMudancasDoC4C    _registrarHistoricoDetalhe
+    Main:1710             Main:1027            Main:1735
+    (semeia 1 linha)      (le a API)           (push local, sem API)
+                              |
+                              v
+                      Timeline (fragment:561)
+
+Ordem final montada em Main.controller.js:1095:
+    [ linha de Abertura , ...mudancas do C4C , ...comentarios locais ]
+
+A Timeline reordena sozinha por dateTime porque tem sortOldestFirst="false"
+(fragment:556). Ou seja: a ordem do array NAO e a ordem exibida.
+
+
+--------------------------------------------------------------------------------
+4. FONTE (1) - A LINHA "CHAMADO ABERTO"
+--------------------------------------------------------------------------------
+Funcao:  _normalizarTickets            Main.controller.js:1710
+Chamada: linhas 504, 536, 1702 (na carga da lista de chamados)
+
+Semeia o array com UM item, se ele ainda nao existir:
+
+    oTicket.historico ??= [{
+        autor:   i18n> detalheHistoricoSistema,
+        quando:  oTicket.dataAbertura,
+        texto:   i18n> detalheHistoricoAbertura,
+        sistema: true                     <-- e o unico item com sistema:true
+    }];
+
+Tambem inicializa historicoCarregando = false (o flag de busy da Timeline).
+
+E essa linha que aparece quando nada mais chega. Se a Timeline mostra SO
+"Chamado aberto", o problema esta na fonte (2).
+
+
+--------------------------------------------------------------------------------
+5. FONTE (2) - AS MUDANCAS VINDAS DO C4C  (o caminho principal)
+--------------------------------------------------------------------------------
+Entrada: _abrirDetalheDoChamado chama _lerMudancasDoC4C(oContext)
+         Main.controller.js:438
+         Dispara a CADA abertura do detalhe, junto com chat e anexos.
+         Nao bloqueia a tela: o detalhe abre na hora e o historico chega depois.
+
+PASSO A PASSO
+-------------
+  [a] Main:1038  guarda de leitura em voo
+      if (historicoCarregando) return;      // evita GET duplicado no duplo clique
+      Em seguida seta historicoCarregando = true -> a Timeline entra em busy.
+
+  [b] Main:1044  _resolverObjectIDdoTicket(...)   (definida em 891)
+      Resolve o ObjectID do chamado. Sem ObjectID o filtro voltaria 200 com
+      value:[], entao o codigo trata ausencia como FALHA de leitura, nao como
+      "chamado sem historico".
+
+  [c] Main:1055  Promise.all - as DUAS leituras saem em paralelo:
+
+        _lerMudancasDoC4CRaw(sObjectID)          Main:1117
+        _buscarEnriquecimentosDoTicket(sObjectID) Main:2833
+
+  [c1] _lerMudancasDoC4CRaw  ->  GET /ChangeDocuments
+       Filtros:
+           BusinessObject eq 'ServiceRequest'   (case-sensitive! 'SERVICEREQUEST'
+                                                 devolve 502)
+           ObjectUUID     eq <ObjectID SEM hifen>   (a forma com hifen devolve
+                                                     200 com value:[])
+       Sorter:  ChangeDateTime desc
+       Limite:  MAX_MUDANCAS_HISTORICO = 200   (Main:87)
+       $select: ID, BusinessObject, ObjectUUID, ChangeDateTime,
+                ChangedByUserName, ObjectNodeElementName,
+                ObjectNodeElementOldContent, ObjectNodeElementNewContent,
+                CompleteNodeHierarchy
+       NAO tem .catch de proposito: o erro precisa subir ate o catch de 1100.
+
+  [c2] _buscarEnriquecimentosDoTicket -> le em paralelo:
+           _lerTextosDoTicket               Main:2877
+             GET /ServiceRequests('X')/ServiceRequestTextCollection
+           _lerBusinessTransactionsDoTicket Main:2904
+             GET /ServiceRequests('X')/ServiceRequestBusinessTransactionDocumentReferenceCollection
+                 ^^^ ESTA CHAMADA ESTA QUEBRADA HOJE - ver secao 7, item A
+       Depois monta dois Map de lookup:
+           _montarLookupTextos               Main:2929  (chave = ObjectID upper)
+           _montarLookupBusinessTransactions Main:2949  (chave = TypeCode upper)
+       Falha aqui NAO derruba a Timeline: o catch devolve Maps vazios e o
+       historico aparece com os codigos crus em vez dos textos.
+
+  [d] Main:1062  _normalizarMudancasComEnriquecimentos   (definida em 2976)
+      Para cada registro bruto:
+          _classificarMudancaC4C(oMudanca, oEnriquecimentos)   Main:2581
+          se devolver null  -> a mudanca e DESCARTADA (some da Timeline)
+          senao             -> _mapearMudancaParaHistorico(...) Main:3001
+
+  [d1] _classificarMudancaC4C - a triagem. Ordem dos testes:
+          1. campo esta em CAMPOS_TIMELINE_IGNORADOS (Main:23)?  -> null
+          2. e mudanca de TEXTO?      _ehMudancaTextoC4C (2624)
+                                   -> _resolverMudancaTextoC4C (2664)
+          3. e referencia de DOC?     _ehMudancaReferenciaDocumentoC4C (2647)
+                                   -> _resolverMudancaReferenciaDocumentoC4C (2712)
+          4. senao                 -> _resolverMudancaPadraoC4C (2761)
+       Os resolvedores usam _extrairObjectIDdeCompleteNodeHierarchy (2799) para
+       achar de qual no a mudanca veio, e os Maps do passo [c2] para trocar
+       codigo por texto.
+
+  [d2] _mapearMudancaParaHistorico (Main:3001) produz o objeto final:
+          {
+            autor:     ChangedByUserName (ou fallback i18n),
+            quando:    ChangeDateTime convertido por _paraIsoLocal,
+            texto:     "Atributo: <X>\nAlterado Para: <Y>",
+            sistema:   false,
+            origemC4C: true          <-- marca usada no merge, ver [e]
+          }
+
+  [e] Main:1082-1096  MERGE e gravacao no modelo
+      As linhas do C4C sao SUBSTITUIDAS, nao acumuladas:
+
+        aLocais = historicoExistente.slice(1).filter(o => o.origemC4C !== true)
+        novo    = [ abertura, ...mudancasC4C, ...aLocais ]
+        setProperty(".../historico", novo)      <-- Main:1096
+
+      E AQUI que a Timeline recebe os dados. Ponto unico de gravacao da fonte (2).
+
+  [f] Main:1100  catch -> so faz Log.error("Falha ao carregar o historico...")
+      e devolve false. A tela NAO mostra erro - fica so com a linha de Abertura.
+  [g] Main:1110  finally -> historicoCarregando = false (sai do busy).
+
+
+--------------------------------------------------------------------------------
+6. FONTE (3) - ACOES DO PROPRIO USUARIO
+--------------------------------------------------------------------------------
+Funcao: _registrarHistoricoDetalhe(oContext, sTexto)   Main.controller.js:1735
+Faz um push direto no array, sem tocar na API:
+
+    { autor: <requisitante>, quando: agora, texto: sTexto, sistema: false }
+
+Repare: NAO tem origemC4C. E por isso que essas linhas sobrevivem ao filtro do
+passo [e] - elas so existem no modelo e nao voltariam numa releitura do C4C.
+
+Os 4 pontos que chamam essa funcao:
+
+  linha | texto gravado                | dentro de                  | funciona?
+  ------|------------------------------|----------------------------|----------
+  674   | "Status alterado para X"     | onDetalheStatusChange      | NAO (*)
+  1610  | "Chamado escalonado"         | onDetalheEscalonar         | NAO (*)
+  1625  | "Responsavel alterado"       | onDetalheResponsavelChange | NAO (*)
+  1686  | "Status alterado para X"     | _atualizarStatusChamado    | SIM
+
+  (*) Esses tres handlers NAO estao ligados a nenhum controle em XML - ver
+      secao 7, item C. Na pratica a fonte (3) so produz linha quando o usuario
+      FINALIZA (fragment:191) ou CANCELA (fragment:199) o chamado.
+
+
+--------------------------------------------------------------------------------
+7. CORRECOES JA APLICADAS (2026-08-08)
+--------------------------------------------------------------------------------
+[FIX 1] ReferenceError de sObjectID  -  Main.controller.js:1051-1058
+  Sintoma: a Timeline nunca mostrava nada do C4C, so a linha de Abertura.
+  Causa:   o codigo encadeava dois .then; sObjectID era parametro do primeiro e
+           era usado no segundo, onde nao existe mais. Dava ReferenceError DEPOIS
+           do GET ja ter voltado com os dados - por isso parecia "a API nao
+           responde", quando na verdade a resposta chegava e era descartada pelo
+           catch da linha 1100.
+  Fix:     as duas leituras passaram para um unico Promise.all dentro do escopo
+           onde sObjectID existe. De quebra ficou realmente paralelo (antes o
+           enriquecimento so comecaria depois do /ChangeDocuments terminar).
+  Como conferir: ESLint com no-undef acusava "1057:61 'sObjectID' is not defined"
+           na versao anterior; agora nao acusa mais.
+
+[FIX 2] Duplicacao do historico a cada reabertura  -  Main.controller.js:1082-1096
+  Sintoma: (nao era visivel antes do FIX 1, porque o ramo do C4C nunca chegava
+           ao merge - o FIX 1 e que ATIVOU esse bug).
+  Causa:   _lerMudancasDoC4C nao tem flag "historicoCarregado" (o chat tem
+           chatCarregado, os anexos tem anexosCarregado), so a guarda de leitura
+           em voo. E o merge concatenava historicoExistente.slice(1) cru, que ja
+           continha as mudancas da leitura anterior. Um chamado com 70 mudancas
+           virava 140 linhas na 2a abertura, 210 na 3a, e assim por diante.
+  Fix:     o merge agora FILTRA origemC4C do array existente antes de concatenar
+           - substitui as linhas do C4C em vez de empilhar, e preserva os
+           comentarios locais da fonte (3).
+
+
+--------------------------------------------------------------------------------
+8. PROBLEMAS CONHECIDOS AINDA EM ABERTO
+--------------------------------------------------------------------------------
+Nada disso foi alterado. Estao aqui para nao se perderem.
+
+[A] GRAVE - enriquecimento de documentos de referencia nunca funciona
+    Main.controller.js:2904 usa o caminho
+        /ServiceRequests('X')/ServiceRequestBusinessTransactionDocumentReferenceCollection
+    Dois erros somados:
+      1) a navegacao em srv/external/ticket.cds:913 se chama
+         ServiceRequestBusinessTransactionDocumentReference - SEM o sufixo
+         "Collection". "Collection" e o nome da ENTIDADE alvo, nao da navegacao.
+         (O projeto ja pisou nessa mina antes - ver comentario em Main:1256 sobre
+         ServiceRequestAttachmentFolder.)
+      2) a entidade alvo NAO esta exposta em srv/app-service.cds (la so existem
+         Employees, Contacts, ServiceRequests, ServiceRequestTexts,
+         ServiceRequestAttachmentFolders e ChangeDocuments). Sem o alvo no
+         servico o CAP nem gera a navegacao no $metadata.
+    Efeito: o Map fica sempre vazio e a Timeline mostra o codigo cru, tipo
+            "Tipo de documento de referencia: 10007". Falha silenciosa: so um
+            Log.error no console, mais um GET desperdicado por abertura.
+    Decisao pendente: expor a entidade e corrigir o caminho, OU remover o ramo
+            de BTR de vez em vez de manter uma chamada que sempre falha.
+
+[B] MEDIO - MAPA_STATUS_CODE (Main.controller.js:53) usa codigos que nao batem
+    O mapa da Timeline usa Z1..Z6. O resto do app usa codigos NUMERICOS:
+        Main:140-142  COCKPIT_STATUS_ABERTO = ["1","4"], EM_ANDAMENTO = ["2"],
+                      FECHADO = ["6"]
+        formatter.js:95  "Z6/OPEN/1=Aberto, 2=Em Processamento, 4=Acao do
+                          Cliente, 5=Concluido, CLOSED/6=Fechado"
+    Duas falhas:
+      - nunca acerta: NewContent="4" -> mapa nao tem "4" -> mostra "Status: 4".
+      - acerta ERRADO: o mapa diz Z6 = "Cancelado", mas o formatter documenta
+        Z6 = Aberto. Rotulo ativamente falso na tela.
+    Alem disso o mesmo mapa e aplicado a tres eixos diferentes
+    (ProcessingStatusCode, ServiceRequestUserLifeCycleStatusCode e
+    ServiceRequestLifeCycleStatusCode), que tem listas de codigo distintas.
+    MAPA_PRIORIDADE_CODE (Main:63) esta CORRETO - nao mexer.
+
+[C] MEDIO - 4 handlers sem wiring em XML
+    onDetalheToggleEdicao (640), onDetalheStatusChange (658),
+    onDetalheEscalonar (1603), onDetalheResponsavelChange (1614) estao definidos
+    mas nenhum XML os referencia (grep em view/, Component.js e manifest.json).
+    Efeito na Timeline: escalonar, trocar responsavel e mudar status pela aba de
+    edicao nao geram linha nenhuma - ver tabela da secao 6.
+    NAO esta claro se a funcionalidade foi removida de proposito ou se o binding
+    se perdeu numa refatoracao. Precisa de decisao de quem conhece o produto.
+
+[D] BAIXO - _mapearMudancaParaHistorico esta definido DUAS vezes
+    Main:1147 (1 parametro) e Main:3001 (2 parametros), no MESMO object literal
+    do Controller.extend. Em JS a ultima chave vence, entao a de 3001 e a viva e
+    a de 1147 e codigo morto - silenciosamente, sem erro.
+    Impacto em runtime: ZERO. O risco e de manutencao: quem editar a de 1147
+    achando que corrige a Timeline nao vera efeito nenhum.
+    O comentario da linha 1145 ("SEM triagem: todo registro vira uma linha")
+    descreve a funcao MORTA e hoje e falso - o fluxo real e triado por
+    _classificarMudancaC4C.
+    ESLint com no-dupe-keys acusa isso.
+
+[E] Suspeitas NAO confirmadas (levantadas em auditoria, faltou evidencia)
+    - _extrairObjectIDdeCompleteNodeHierarchy nao remove hifen do ObjectID, mas
+      o Map de textos e chaveado sem hifen. Se o CompleteNodeHierarchy vier
+      hifenizado, NENHUM lookup de texto acerta. Nao foi possivel confirmar o
+      formato real (sem fixture no repo).
+    - CAMPOS_TIMELINE_IGNORADOS (Main:23) compara por igualdade EXATA, entao
+      nomes qualificados tipo "Party/ObjectID" passam pelo filtro e viram ruido
+      na Timeline.
+    - _resolverMudancaTextoC4C usa TypeCodeText cru como rotulo, e o tenant
+      devolve esses textos em INGLES ("Reply to Customer") numa UI PT-BR. A
+      convencao do projeto (Main:145-147) manda traduzir pelo CODE, nao pelo
+      *CodeText.
+    - O JSDoc dos resolvedores anuncia um campo "exibir" que nenhum resolvedor
+      produz. Hoje nao quebra nada (o teste e "if (!oClassificacao)"), mas quem
+      refatorar para testar "if (!oClassificacao.exibir)" apaga a Timeline
+      inteira em silencio.
+
+
+--------------------------------------------------------------------------------
+9. COMO DEPURAR
+--------------------------------------------------------------------------------
+Breakpoints uteis (Main.controller.js), do mais util para o mais granular:
+
+  1096  aHistoricoMesclado -> o array EXATO que a Timeline vai renderizar.
+        Se voce so puder por UM breakpoint, ponha aqui.
+  1133  aMudancas -> payload cru do /ChangeDocuments, antes de qualquer
+        tratamento. Serve para separar "a API nao trouxe" de "o codigo perdeu".
+  1060  aMudancas + oEnriquecimentos juntos, antes de normalizar.
+  2980  oClassificacao de cada mudanca - e aqui que itens viram null e somem.
+  3001  o objeto {autor, quando, texto} de cada item individual.
+
+Sem breakpoint, no console do DevTools com o detalhe aberto:
+
+    const oTl = sap.ui.getCore().byId(
+        document.querySelector("[id$='idTimelineHistorico']").id);
+    console.table(oTl.getBinding("content").getContexts()
+        .map(c => c.getObject()));
+
+Triagem rapida do sintoma:
+  - Timeline SO com "Chamado aberto"
+        -> a fonte (2) falhou. Veja o console: procure "Falha ao carregar o
+           historico do chamado". Confira na aba Network se o GET de
+           ChangeDocuments voltou 200 com registros - se voltou, o problema esta
+           no processamento (entre 1060 e 1096), nao na API.
+  - Timeline com linhas repetidas
+        -> o merge do passo [e] voltou a acumular. Ver FIX 2.
+  - Timeline com codigo cru no lugar do texto ("Status: 4", "Tipo: 10007")
+        -> enriquecimento/mapa. Ver secao 8, itens A e B.
+  - Linhas em branco na Timeline
+        -> o objeto foi produzido sem as chaves quando/autor/texto. Breakpoint
+           em 3001.
+
+Verificacao estatica (nao ha config de ESLint no projeto; use uma flat config
+avulsa com as regras no-undef e no-dupe-keys):
+
+    node --check app/mw_monitor_chamados/webapp/controller/Main.controller.js
+
+Rodar o app:
+
+    npm run watch-mw_monitor_chamados
+
+
+--------------------------------------------------------------------------------
+10. ARQUIVOS ENVOLVIDOS
+--------------------------------------------------------------------------------
+  app/mw_monitor_chamados/webapp/view/DetalheChamado.fragment.xml
+        o controle Timeline e os bindings (linhas 541-567)
+  app/mw_monitor_chamados/webapp/controller/Main.controller.js
+        TODA a logica. Blocos principais: 1027-1160 (leitura do C4C),
+        1735 (acoes locais), 2581-3025 (classificacao e enriquecimento),
+        23-90 (constantes e mapas)
+  app/mw_monitor_chamados/webapp/model/formatter.js
+        dataAbertura (199), contagem (258), historicoIcone (262)
+  app/mw_monitor_chamados/webapp/i18n/i18n.properties
+        detalheAtividadeRecente (366), detalheHistoricoSistema (369),
+        detalheHistoricoAbertura (372), detalheChatAutorDesconhecido (327)
+  srv/app-service.cds       quais entidades do C4C estao expostas
+  srv/external/ticket.cds   nomes reais das navegacoes (cuidado com o sufixo
+                            "Collection" - ver secao 8 item A)
+  srv/external/changedoclist.cds  a entidade ChangeDocumentCollection
+
+================================================================================

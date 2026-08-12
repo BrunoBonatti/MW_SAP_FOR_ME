@@ -1,0 +1,53 @@
+# Dependencies
+node_modules/
+
+# CAP build
+target/
+_out/
+gen/
+
+# Local credentials and environment variables
+.cdsrc-private.json
+.env
+.env.*
+default-*.json
+
+# Local databases
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.db
+
+# UI5 build do app (gerado por npm run build)
+app/*/dist/
+
+# MTA build
+mta_archives/
+*_mta_build_tmp/
+*.mtar
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Operating system
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# CAP CDS Typer
+@cds-models/
+
+# Pasta de referencia local (copia de outro repo)
+APAGAR/
+
+# Skill local de deploy/Work Zone (nao versionada)
+.claude/skills/workzone/
+
+# Anotacoes locais de estudo (Timeline UI5) - nao carregadas pelo app
+#docs/

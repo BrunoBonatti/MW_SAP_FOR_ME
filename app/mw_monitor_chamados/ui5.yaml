@@ -1,0 +1,42 @@
+# yaml-language-server: $schema=https://sap.github.io/ui5-tooling/schema/ui5.yaml.json
+
+specVersion: "4.0"
+metadata:
+  name: megawork.mwmonitorchamados
+type: application
+server:
+  customMiddleware:
+    - name: fiori-tools-proxy
+      afterMiddleware: compression
+      configuration:
+        ignoreCertErrors: false
+        # A dataSource do manifest.json e RELATIVA ("employee/", sem barra inicial): no Work
+        # Zone o app roda atras do approuter gerenciado sob um prefixo de path, e URI absoluta
+        # ("/employee/") sai na raiz do host do launchpad -> 404 antes de chegar na destination
+        # (MEDIDO em 2026-08-05). Localmente a URI relativa resolve para
+        # /megawork.mwmonitorchamados/employee/..., que o CAP nao serve — este backend proxy
+        # devolve o path para o CAP na mesma porta.
+        backend:
+          - path: /employee
+            url: http://localhost:4004
+        ui5:
+          path:
+            - /resources
+            - /test-resources
+          url: https://sapui5.hana.ondemand.com
+    - name: fiori-tools-appreload
+      afterMiddleware: compression
+      configuration:
+        port: 35729
+        path: webapp
+        delay: 300
+    - name: fiori-tools-preview
+      afterMiddleware: fiori-tools-appreload
+      configuration:
+        flp:
+          theme: sap_horizon
+builder:
+  resources:
+    excludes:
+      - /test/**
+      - /localService/**

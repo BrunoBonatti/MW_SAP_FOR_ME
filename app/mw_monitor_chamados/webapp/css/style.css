@@ -1,0 +1,170 @@
+/* Texto secundario: data da bolha do chat, tamanho do anexo, subtitulo da lista */
+.mwLegenda {
+    font-size: 0.75rem;
+    color: var(--sapContent_LabelColor, #6a6d70);
+}
+
+/* Sem isto o "overflow: hidden" que o Horizon aplica em .sapFCardContent corta a tabela
+   e desliga o sticky="ColumnHeaders". Classe interna do tema. */
+.sapFCard.mwCartaoLista > .sapFCardContent {
+    overflow: visible;
+}
+
+.mwFiltroBarra {
+    box-sizing: border-box;
+    padding-bottom: 0.5rem;
+    border-bottom: 0.0625rem solid var(--sapGroup_ContentBorderColor, #d9d9d9);
+}
+
+/* Sem moldura propria: quem molda a tabela e o cartao. */
+.mwTabelaChamados {
+    box-sizing: border-box;
+    background-color: transparent;
+}
+
+/* Classes internas da sap.m.Table: ajuste cosmetico, nada depende delas. */
+.mwTabelaChamados .sapMListTblHeaderCell {
+    padding-top: 0.75rem;
+    padding-bottom: 0.75rem;
+}
+
+.mwTabelaChamados .sapMListTblHeaderCell .sapMText {
+    font-weight: 600;
+    color: var(--sapContent_LabelColor, #6a6d70);
+}
+
+.mwTabelaChamados .sapMListTblCell {
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+}
+
+.mwChatLinha {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+}
+
+.mwChatBolhaEntrada,
+.mwChatBolhaSaida {
+    box-sizing: border-box;
+    flex: 0 1 auto;
+    width: auto;
+    min-width: 3rem;
+    max-width: 70%;
+    padding: 0.625rem 0.75rem;
+    border-radius: 0.75rem;
+    box-shadow: 0 0.0625rem 0.1875rem rgba(0, 0, 0, 0.12);
+}
+
+.mwChatBolhaEntrada {
+    background-color: var(--sapNeutralBackground, #f1f3f5);
+    border-top-left-radius: 0.25rem;
+}
+
+.mwChatBolhaSaida {
+    background-color: var(--sapSuccessBackground, #e4f7dc);
+    border-top-right-radius: 0.25rem;
+}
+
+.mwChatTextoQuebra {
+    display: block;
+    min-width: 0;
+    max-width: 100%;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    white-space: pre-wrap;
+}
+
+/* Titulo+subtitulo da pagina viram um header
+   proprio, separado do conteudo por uma linha, em vez de flutuar solto.
+   Fundo branco "sangrando" ate a borda da tela: a Page usa
+   sapUiResponsiveContentPadding (1rem/2rem/3rem conforme phone/tablet/desktop),
+   entao aqui a margem negativa cancela esse padding e o padding proprio
+   repoe o mesmo respiro por dentro, so que agora com fundo branco atras.
+   ATENCAO: nenhum markup usa .mwPageHeader hoje - a classe vem do branch do colega e
+   fica reservada para as outras telas; nao e codigo morto por acidente. Os valores de
+   margem negativa ainda nao foram conferidos contra o padding real das Pages deste app. */
+.mwPageHeader {
+    box-sizing: border-box;
+    margin: -1rem -1rem 1.5rem;
+    padding: 1.25rem 1rem;
+    background-color: var(--sapBaseColor, #ffffff);
+    border-bottom: 0.0625rem solid var(--sapGroup_ContentBorderColor, #d9d9d9);
+}
+@media (min-width: 600px) {
+    .mwPageHeader {
+        margin-left: -2rem;
+        margin-right: -2rem;
+        padding-left: 2rem;
+        padding-right: 2rem;
+    }
+}
+@media (min-width: 1024px) {
+    .mwPageHeader {
+        margin-left: -3rem;
+        margin-right: -3rem;
+        padding-left: 3rem;
+        padding-right: 3rem;
+    }
+}
+/* Zebra: linhas alternadas para facilitar a leitura de listas longas.
+   Overlay cinza neutro (nao uma cor fixa) para funcionar em tema claro e escuro.
+   O :not(:hover):not(.sapMLIBActive) e obrigatorio: sem ele este seletor (mais especifico)
+   vence o hover e o feedback de clique do tema nas linhas pares - justo o affordance de que
+   a lista de recentes agora precisa. Classes internas do tema. */
+.mwListZebra .sapMLIB:nth-child(even):not(:hover):not(.sapMLIBActive) {
+    background-color: rgba(128, 128, 128, 0.08);
+}
+/* Item da lista de recentes do cockpit. O min-width: 0 e obrigatorio, nao cosmetico:
+   o Title do item e nowrap, entao como flex item esta VBox teria min-width auto = a
+   largura INTEIRA do titulo, nao encolheria, e a linha estouraria para a direita -
+   sendo cortada pelo overflow:hidden que o Horizon aplica em .sapFCardContent (mesmo
+   motivo do min-width em .mwChatLinha). Com 0, o titulo trunca com "..." e a linha
+   respeita a largura do cartao. */
+.mwCockpitRecenteItem {
+    min-width: 0;
+}
+/* A seta do item de recentes: flex-shrink 0 para o titulo longo encolher (min-width: 0
+   acima) em vez de esmagar o icone ate ele desaparecer. */
+.mwCockpitRecenteSeta {
+    flex-shrink: 0;
+}
+
+/* Destaque do cartao: borda azul contornando o cartao inteiro, mas o
+   tingimento azul fica so no header - a lista abaixo mantem o fundo e o
+   zebra normais. */
+.mwCardDestaque {
+    border: 0.0625rem solid var(--sapBrandColor, #0a6ed1);
+}
+.mwCardDestaque .sapFCardHeader {
+    background-color: var(--sapInformationBackground, rgba(10, 110, 209, 0.06));
+}
+
+/* FileUploader com buttonOnly: o tema monta um "campo" em volta do botao, e esse campo corta o
+   botao. O .sapMInputBaseContentWrapper tem box-sizing: border-box, uma borda de
+   var(--sapField_BorderWidth) e overflow: hidden (regra da sap.m), enquanto o botao de dentro
+   recebe a altura CHEIA do wrapper - ou seja, o botao fica 2x a borda mais alto que a area
+   interna dele e o rodape (borda de baixo e os cantos arredondados) sai fatiado. Vale nas duas
+   densidades: em compacto wrapper e botao vao os dois a var(--sapElement_Compact_Height), em
+   cozy os dois a var(--sapElement_Height); a conta do estouro e a mesma. A regra do proprio
+   Horizon que resolveria centralizando (.sapUiFup .sapMInputBase.sapUiFupButtonOnly
+   .sapMInputBaseContentWrapper { align-items: center }) NUNCA casa, porque
+   .sapMInputBase.sapUiFupButtonOnly e o proprio .sapUiFup e nao um descendente dele - nao ha
+   correcao a esperar do tema. height: auto tira o estouro na origem, overflow: visible protege
+   caso o tema mude a conta, e border-color: transparent remove a moldura dupla (o botao ja
+   desenha a borda dele). Classes internas do tema, mesma familia do .mwCartaoLista. */
+.mwUploaderBotao > .sapMInputBaseContentWrapper {
+    height: auto;
+    overflow: visible;
+    border-color: transparent;
+}
+
+/* Botao de voltar do cabecalho do detalhe, ao lado do Breadcrumbs. Os valores sao os da
+   linha WZv1: o botao e encolhido para a altura de uma linha de breadcrumb (1.375rem), e o
+   recuo negativo alinha o icone com a margem do titulo, cancelando o padding proprio do
+   sap.m.Button. Classe interna do tema no seletor, mesma familia do .mwUploaderBotao. */
+.mwDetalheVoltarBotao.sapMBtn {
+    height: 1.375rem;
+    min-width: 1.375rem;
+    margin-left: -1.0rem;
+}

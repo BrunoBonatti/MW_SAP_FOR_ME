@@ -1,0 +1,129 @@
+{
+  "name": "mw-monitor-chamados",
+  "version": "1.0.0",
+  "dependencies": {
+    "@cap-js/hana": "^2",
+    "@sap/cds": "^9",
+    "@sap/xssec": "^4",
+    "@sap-cloud-sdk/connectivity": "^4",
+    "@sap-cloud-sdk/http-client": "^4",
+    "@sap-cloud-sdk/resilience": "^4"
+  },
+  "devDependencies": {
+    "@cap-js/sqlite": "^2.4",
+    "@sap/cds-dk": "^9",
+    "cds-plugin-ui5": "^0.17.0"
+  },
+  "scripts": {
+    "start": "cds-serve",
+    "watch-mw_monitor_chamados": "cds watch --open megawork.mwmonitorchamados/index.html?sap-ui-xx-viewCache=false --livereload false"
+  },
+  "cds": {
+    "requires": {
+      "[production]": {
+        "auth": "xsuaa",
+        "db": false
+      },
+      "kinds": {
+        "c4c": {
+          "kind": "odata-v2",
+          "[production]": {
+            "credentials": {
+              "destination": "C4C",
+              "path": "/sap/c4c/odata/v1/c4codataapi"
+            }
+          }
+        }
+      },
+      "c4c": {
+        "kind": "c4c"
+      },
+      "employeeanduser": {
+        "kind": "c4c",
+        "model": "srv/external/employeeanduser",
+        "csrf": {
+          "method": "get"
+        },
+        "csrfInBatch": true
+      },
+      "contact": {
+        "kind": "c4c",
+        "model": "srv/external/contact",
+        "csrf": {
+          "method": "get"
+        },
+        "csrfInBatch": true
+      },
+      "ticket": {
+        "kind": "c4c",
+        "model": "srv/external/ticket",
+        "csrf": {
+          "method": "get"
+        },
+        "csrfInBatch": true
+      },
+      "account": {
+        "kind": "c4c",
+        "[development]": {
+          "credentials": {
+            "url": "https://my369126.crm.ondemand.com/sap/c4c/odata/v1/c4codata"
+          }
+        },
+        "[production]": {
+          "credentials": {
+            "destination": "C4C",
+            "path": "/sap/c4c/odata/v1/c4codata"
+          }
+        },
+        "csrf": {
+          "method": "get"
+        },
+        "csrfInBatch": true
+      },
+      "changedoclist": {
+        "kind": "c4c",
+        "model": "srv/external/changedoclist",
+        "[development]": {
+          "credentials": {
+            "url": "https://my369126.crm.ondemand.com/sap/c4c/odata/v1/changedoclist"
+          }
+        },
+        "[production]": {
+          "credentials": {
+            "destination": "C4C",
+            "path": "/sap/c4c/odata/v1/changedoclist"
+          }
+        },
+        "csrf": {
+          "method": "get"
+        },
+        "csrfInBatch": true
+      },
+      "destinations": true,
+      "html5-repo": true,
+      "workzone": true,
+      "servicerequestinteraction": {
+        "kind": "c4c",
+        "model": "srv/external/servicerequestinteraction",
+        "[development]": {
+          "credentials": {
+            "url": "https://my369126.crm.ondemand.com/sap/c4c/odata/v1/servicerequestinteraction"
+          }
+        },
+        "[production]": {
+          "credentials": {
+            "destination": "C4C",
+            "path": "/sap/c4c/odata/v1/servicerequestinteraction"
+          }
+        },
+        "csrf": {
+          "method": "get"
+        },
+        "csrfInBatch": true
+      }
+    }
+  },
+  "workspaces": [
+    "app/*"
+  ]
+}

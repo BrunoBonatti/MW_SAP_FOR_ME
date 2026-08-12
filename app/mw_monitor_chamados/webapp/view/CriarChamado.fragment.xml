@@ -1,0 +1,298 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:form="sap.ui.layout.form"
+    xmlns:u="sap.ui.unified"
+    core:require="{fmt: 'megawork/mwmonitorchamados/model/formatter'}">
+    <!-- Com showNextButton="false" o evento complete nunca dispara: toda a navegacao mora no
+         rodape da Page criarChamado e o controller chama validateStep/invalidateStep. -->
+    <!-- renderMode="Page": em "Scroll" o goToStep nao rola (a Page escondida tem top 0). Os steps
+         tem de ser estaticos - insertStep/removeStep lancam erro fora do designtime. -->
+    <Wizard
+        id="wizardCriarChamado"
+        width="100%"
+        height="100%"
+        renderMode="Page"
+        backgroundDesign="Transparent"
+        showNextButton="false"
+        enableBranching="false"
+        stepTitleLevel="H3"
+        stepActivate=".onWizardStepActivate"
+        navigationChange=".onWizardNavigationChange"
+        class="sapUiResponsivePadding--header sapUiResponsivePadding--content">
+
+        <!-- Tipo e prioridade nao tem campo. O tipo e travado no controller (SRRQ) e o resumo do
+             passo 4 mostra um texto fixo; a prioridade fica no model novoChamado com o default
+             NORMAL e so aparece no mesmo resumo. -->
+        <WizardStep
+            id="stepClassificacao"
+            title="{i18n>criarChamadoWizStep1}"
+            icon="sap-icon://request"
+            validated="false">
+            <VBox width="100%">
+                <form:SimpleForm
+                    editable="true"
+                    layout="ResponsiveGridLayout"
+                    backgroundDesign="Transparent"
+                    singleContainerFullSize="false"
+                    labelSpanXL="12"
+                    labelSpanL="12"
+                    labelSpanM="12"
+                    labelSpanS="12"
+                    adjustLabelSpan="false"
+                    emptySpanXL="0"
+                    emptySpanL="0"
+                    emptySpanM="0"
+                    emptySpanS="0"
+                    columnsXL="2"
+                    columnsL="2"
+                    columnsM="1">
+
+                    <Label
+                        text="{i18n>criarChamadoTitulo}"
+                        required="true"
+                        labelFor="inputTituloChamado" />
+                    <Input
+                        id="inputTituloChamado"
+                        value="{novoChamado>/titulo}"
+                        placeholder="{i18n>criarChamadoTituloPlaceholder}"
+                        maxLength="100"
+                        valueLiveUpdate="true"
+                        liveChange=".onDetalhesLiveChange"
+                        width="100%" />
+
+                    <Label
+                        text="{i18n>criarChamadoCliente}"
+                        labelFor="selectClienteChamado" />
+                    <Select
+                        id="selectClienteChamado"
+                        selectedKey="{novoChamado>/cliente}"
+                        items="{codelists>/clientes}"
+                        width="100%">
+                        <core:Item key="{codelists>code}" text="{codelists>descricao}" />
+                    </Select>
+
+                    <!-- Rotulo "Requisitante" sobre novoChamado>/contato: o nome da propriedade e
+                         do dado gravado pelo controller, nao do texto de tela. -->
+                    <Label text="{i18n>criarChamadoRequisitante}" />
+                    <ObjectStatus
+                        text="{novoChamado>/contato}"
+                        icon="sap-icon://employee"
+                        state="None" />
+
+                </form:SimpleForm>
+            </VBox>
+        </WizardStep>
+
+        <WizardStep
+            id="stepDetalhes"
+            title="{i18n>criarChamadoWizStep2}"
+            icon="sap-icon://edit"
+            validated="false">
+            <VBox width="100%">
+                <form:SimpleForm
+                    editable="true"
+                    layout="ResponsiveGridLayout"
+                    backgroundDesign="Transparent"
+                    labelSpanXL="12"
+                    labelSpanL="12"
+                    labelSpanM="12"
+                    labelSpanS="12"
+                    adjustLabelSpan="false"
+                    emptySpanXL="0"
+                    emptySpanL="0"
+                    emptySpanM="0"
+                    emptySpanS="0"
+                    columnsXL="2"
+                    columnsL="2"
+                    columnsM="1">
+
+                    <Label
+                        text="{i18n>criarChamadoDescricao}"
+                        required="true"
+                        labelFor="textAreaDescricaoChamado" />
+                    <TextArea
+                        id="textAreaDescricaoChamado"
+                        value="{novoChamado>/descricao}"
+                        placeholder="{i18n>criarChamadoDescricaoPlaceholder}"
+                        rows="8"
+                        growing="true"
+                        growingMaxLines="14"
+                        maxLength="2000"
+                        showExceededText="true"
+                        valueLiveUpdate="true"
+                        liveChange=".onDetalhesLiveChange"
+                        width="100%" />
+
+                </form:SimpleForm>
+
+                <!-- Dica de qualidade da descricao: vira Success aos 40 caracteres. -->
+                <ObjectStatus
+                    class="sapUiTinyMarginTop"
+                    visible="{= !!${novoChamado>/descricao} }"
+                    text="{
+                        parts: [
+                            {path: 'novoChamado>/descricao'},
+                            {path: 'i18n>criarChamadoDicaDescricao'},
+                            {path: 'i18n>criarChamadoDicaDescricaoOk'}
+                        ],
+                        formatter: 'fmt.dicaDescricao'
+                    }"
+                    state="{path: 'novoChamado>/descricao', formatter: 'fmt.dicaDescricaoState'}"
+                    icon="{path: 'novoChamado>/descricao', formatter: 'fmt.dicaDescricaoIcone'}" />
+            </VBox>
+        </WizardStep>
+
+        <WizardStep
+            id="stepAnexo"
+            title="{i18n>criarChamadoWizStep3}"
+            icon="sap-icon://attachment">
+            <VBox width="100%">
+                <!-- O FileUploader NAO pode voltar para o additionalContent do IllustratedMessage:
+                     o empty state desaparece com o primeiro arquivo e levaria o botao junto, e o
+                     usuario nao conseguiria escolher o segundo. Extensao e tamanho sao validados no
+                     controller (_filtrarAnexosPermitidos), NAO por fileType/maximumFileSize: o
+                     controle reprova a selecao inteira no primeiro arquivo ofensor e volta sem
+                     disparar o change, ou seja, os arquivos bons escolhidos junto se perdiam. -->
+                <HBox width="100%" justifyContent="End" class="sapUiTinyMarginBottom">
+                    <u:FileUploader
+                        id="fileUploaderAnexo"
+                        name="anexoChamado"
+                        buttonOnly="true"
+                        iconFirst="true"
+                        icon="sap-icon://upload-to-cloud"
+                        buttonText="{i18n>criarChamadoAnexosAdicionar}"
+                        tooltip="{i18n>criarChamadoAnexosAdicionar}"
+                        multiple="true"
+                        sameFilenameAllowed="true"
+                        change=".onAnexoChange">
+                        <u:layoutData>
+                            <FlexItemData shrinkFactor="0" />
+                        </u:layoutData>
+                    </u:FileUploader>
+                </HBox>
+                <IllustratedMessage
+                    illustrationType="sapIllus-UploadCollection"
+                    illustrationSize="Spot"
+                    enableDefaultTitleAndDescription="false"
+                    enableVerticalResponsiveness="false"
+                    title="{i18n>criarChamadoAnexoTitulo}"
+                    description="{i18n>criarChamadoAnexoDescricao}"
+                    visible="{= ${novoChamado>/anexos}.length === 0 }" />
+                <List
+                    items="{novoChamado>/anexos}"
+                    showSeparators="Inner"
+                    visible="{= ${novoChamado>/anexos}.length &gt; 0 }">
+                    <CustomListItem>
+                        <HBox
+                            width="100%"
+                            alignItems="Center"
+                            justifyContent="SpaceBetween"
+                            class="sapUiSmallMargin">
+                            <HBox alignItems="Center">
+                                <Avatar
+                                    displayShape="Square"
+                                    displaySize="S"
+                                    src="{path: 'novoChamado>nome', formatter: 'fmt.anexoIcone'}" />
+                                <VBox class="sapUiSmallMarginBegin">
+                                    <Title
+                                        titleStyle="H6"
+                                        text="{novoChamado>nome}" />
+                                    <Text
+                                        text="{novoChamado>tamanho}"
+                                        class="mwLegenda" />
+                                </VBox>
+                            </HBox>
+                            <Button
+                                icon="sap-icon://decline"
+                                type="Transparent"
+                                tooltip="{i18n>criarChamadoAnexoRemover}"
+                                press=".onRemoverAnexo">
+                                <layoutData>
+                                    <FlexItemData shrinkFactor="0" />
+                                </layoutData>
+                            </Button>
+                        </HBox>
+                    </CustomListItem>
+                </List>
+            </VBox>
+        </WizardStep>
+
+        <WizardStep
+            id="stepRevisao"
+            title="{i18n>criarChamadoWizStep4}"
+            icon="sap-icon://validate">
+            <VBox width="100%">
+                <!-- Nao usar prioridadeState/prioridadeIcone aqui: eles esperam os codes do C4C
+                     (1/2/3/7), e o formulario usa IMEDIATA/URGENTE/NORMAL/BAIXA. -->
+                <form:SimpleForm
+                    editable="false"
+                    layout="ResponsiveGridLayout"
+                    backgroundDesign="Transparent"
+                    labelSpanXL="12"
+                    labelSpanL="12"
+                    labelSpanM="12"
+                    labelSpanS="12"
+                    adjustLabelSpan="false"
+                    emptySpanXL="0"
+                    emptySpanL="0"
+                    emptySpanM="0"
+                    emptySpanS="0"
+                    columnsXL="2"
+                    columnsL="2"
+                    columnsM="1">
+
+                    <Label text="{i18n>criarChamadoTitulo}" />
+                    <Text text="{novoChamado>/titulo}" />
+
+                    <Label text="{i18n>criarChamadoTipo}" />
+                    <Text text="{i18n>tipoChamadoSRRQ}" />
+
+                    <Label text="{i18n>criarChamadoPrioridade}" />
+                    <Text
+                        text="{
+                        parts: [
+                            {path: 'novoChamado>/prioridade'},
+                            {path: 'codelists>/prioridadesChamado'}
+                        ],
+                        formatter: 'fmt.codelistTexto'
+                    }" />
+
+                    <!-- Contagem, nao nome: com N arquivos a linha unica de nome nao serve. O
+                         padrao {0} vem cru do ResourceBundle e quem substitui e o formatter. -->
+                    <Label text="{i18n>criarChamadoAnexo}" />
+                    <ObjectStatus
+                        icon="sap-icon://attachment"
+                        state="{path: 'novoChamado>/anexos', formatter: 'fmt.anexosState'}"
+                        text="{
+                            parts: [
+                                {path: 'novoChamado>/anexos'},
+                                {path: 'i18n>criarChamadoWizSemAnexo'},
+                                {path: 'i18n>criarChamadoAnexosResumoUm'},
+                                {path: 'i18n>criarChamadoAnexosResumoVarios'}
+                            ],
+                            formatter: 'fmt.anexosResumo'
+                        }" />
+
+                    <Label text="{i18n>criarChamadoCliente}" />
+                    <Text
+                        text="{
+                        parts: [
+                            {path: 'novoChamado>/cliente'},
+                            {path: 'codelists>/clientes'}
+                        ],
+                        formatter: 'fmt.codelistTexto'
+                    }" />
+
+                    <Label text="{i18n>criarChamadoRequisitante}" />
+                    <Text text="{novoChamado>/contato}" />
+
+                    <core:Title text="{i18n>criarChamadoDescricao}" />
+                    <Text text="{novoChamado>/descricao}" />
+
+                </form:SimpleForm>
+            </VBox>
+        </WizardStep>
+
+    </Wizard>
+</core:FragmentDefinition>

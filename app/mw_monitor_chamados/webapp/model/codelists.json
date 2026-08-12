@@ -1,0 +1,69 @@
+{
+  "status": [
+    {
+      "code": "",
+      "descricao": "Todos"
+    },
+    {
+      "code": "ABERTO",
+      "descricao": "Aberto"
+    },
+    {
+      "code": "EM_ANDAMENTO",
+      "descricao": "Em andamento"
+    },
+    {
+      "code": "AGUARDANDO",
+      "descricao": "Aguardando"
+    },
+    {
+      "code": "CONCLUIDO",
+      "descricao": "Concluído"
+    },
+    {
+      "code": "CANCELADO",
+      "descricao": "Cancelado"
+    }
+  ],
+  "prioridades": [
+    {
+      "code": "",
+      "descricao": "Todas"
+    },
+    {
+      "code": "BAIXA",
+      "descricao": "Baixa"
+    },
+    {
+      "code": "MEDIA",
+      "descricao": "Média"
+    },
+    {
+      "code": "ALTA",
+      "descricao": "Alta"
+    },
+    {
+      "code": "CRITICA",
+      "descricao": "Crítica"
+    }
+  ],
+  "clientes": [],
+  "prioridadesChamado": [
+    {
+      "code": "IMEDIATA",
+      "descricao": "Imediata"
+    },
+    {
+      "code": "URGENTE",
+      "descricao": "Urgente"
+    },
+    {
+      "code": "NORMAL",
+      "descricao": "Normal"
+    },
+    {
+      "code": "BAIXA",
+      "descricao": "Baixa"
+    }
+  ]
+}

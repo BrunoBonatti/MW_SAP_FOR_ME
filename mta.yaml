@@ -1,0 +1,175 @@
+_schema-version: 3.3.0
+ID: mw-monitor-chamados
+version: 1.0.0
+description: "A simple CAP project."
+parameters:
+  enable-parallel-deployments: true
+  deploy_mode: html5-repo
+build-parameters:
+  before-all:
+    - builder: custom
+      commands:
+        - npm ci
+        - npx cds build --production
+modules:
+  - name: mw-monitor-chamados-srv
+    type: nodejs
+    path: gen/srv
+    parameters:
+      instances: 1
+      buildpack: nodejs_buildpack
+    build-parameters:
+      builder: npm-ci
+    provides:
+      - name: srv-api # required by consumers of CAP services (e.g. approuter)
+        properties:
+          srv-url: ${default-url}
+    requires:
+      - name: mw-monitor-chamados-auth
+      - name: mw-monitor-chamados-destination
+
+  - name: mw-monitor-chamados-app-deployer
+    type: com.sap.application.content
+    path: gen
+    build-parameters:
+      build-result: app/
+      requires:
+        - name: mwmonitorchamadosmw_monitor_chamados
+          artifacts:
+            - mw_monitor_chamados.zip
+          target-path: app/
+    requires:
+      - name: mw-monitor-chamados-auth
+      - name: srv-api
+      - name: mw-monitor-chamados-html5-repo-host
+        parameters:
+          content-target: true
+          config:
+            HTML5Runtime_enabled: true
+    # Sem bloco `destinations` aqui: o content-target deste modulo e o html5-apps-repo, e um
+    # bloco de destinations so cria destination quando o target e o destination service — o
+    # deploy aceita e descarta em silencio. A srv-api que o xs-app.json usa e criada no
+    # modulo mw-monitor-chamados-destinations.
+
+  - name: mwmonitorchamadosmw_monitor_chamados
+    type: html5
+    path: app/mw_monitor_chamados
+    build-parameters:
+      build-result: dist
+      builder: custom
+      commands:
+        - npm ci
+        - npm run build
+      supported-platforms:
+        []
+
+  - name: mw-monitor-chamados-destinations
+    type: com.sap.application.content
+    requires:
+      - name: mw-monitor-chamados-auth
+        parameters:
+          service-key:
+            name: mw-monitor-chamados-auth-key
+      - name: mw-monitor-chamados-html5-repo-host
+        parameters:
+          service-key:
+            name: mw-monitor-chamados-html5-repo-host-key
+      - name: srv-api
+      - name: mw-monitor-chamados-destination
+        parameters:
+          content-target: true
+    build-parameters:
+      no-source: true
+    parameters:
+      content:
+        # subaccount (não instance): o Work Zone roda como subscription e só enxerga
+        # destinations de subaccount — confirmado via API do destination service em
+        # 2026-08-04; com instance: o app não aparece no Content Explorer.
+        subaccount:
+          existing_destinations_policy: update
+          destinations:
+            - Name: mw-monitor-chamados-html5-repository
+              ServiceInstanceName: mw-monitor-chamados-html5-repo-host
+              ServiceKeyName: mw-monitor-chamados-html5-repo-host-key
+              sap.cloud.service: mwmonitorchamados.service
+            - Name: mw-monitor-chamados-auth
+              Authentication: OAuth2UserTokenExchange
+              ServiceInstanceName: mw-monitor-chamados-auth
+              ServiceKeyName: mw-monitor-chamados-auth-key
+              sap.cloud.service: mwmonitorchamados.service
+            # A srv-api NAO entra aqui: este deployer de conteudo so aceita destination
+            # baseada em service key (exige ServiceInstanceName — MEDIDO no deploy de
+            # 2026-08-05: "[ERROR] Missing destination property [ServiceInstanceName] in
+            # destination srv-api"). Destination de URL vai no init_data do resource
+            # mw-monitor-chamados-destination, abaixo.
+
+resources:
+  - name: mw-monitor-chamados-auth
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: xsuaa
+      service-plan: application
+      path: ./xs-security.json
+      config:
+        xsappname: mw-monitor-chamados-${space}
+        tenant-mode: dedicated
+        oauth2-configuration:
+          credential-types:
+            - "binding-secret"
+            - "x509"
+  # Sem HANA de propósito: o serviço não tem nenhuma entidade persistida (todas as entidades
+  # são projeções sobre o C4C, servidas por handlers em srv/app-service.js). Se algum dia
+  # entrar tabela de verdade, voltar com um resource hdi-container + módulo hdb apontando
+  # para gen/db, e um requires no módulo -srv.
+  - name: mw-monitor-chamados-destination
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: destination
+      service-plan: lite
+      config:
+        # HTML5Runtime_enabled: o runtime do Work Zone so resolve destinations de instances
+        # com esta flag (alem das de subaccount).
+        HTML5Runtime_enabled: true
+        init_data:
+          # Rota /employee/* do xs-app.json: o nome tem de ser exatamente "srv-api".
+          # NoAuthentication + ForwardAuthToken: a credencial nao esta na destination, o
+          # approuter repassa o JWT do usuario e o CAP valida com o xsuaa. Criada nos DOIS
+          # niveis: instance (desenho padrao do gerador, lida via HTML5Runtime_enabled) e
+          # subaccount (nivel que este subaccount comprovadamente enxerga — ver comentario
+          # no modulo -destinations).
+          #
+          # URL FIXA de proposito: neste subaccount o deployer NAO resolve ~{srv-api/srv-url}
+          # dentro de init_data — o broker recebeu o placeholder literal e falhou com
+          # "Failed to update the destination service instance with the user provided
+          # configuration" (MEDIDO em 2026-08-05, dmol da operacao 2ef9279d + bisect via
+          # cf update-service: a MESMA config com URL real e aceita). A rota e estavel
+          # enquanto org/space/nome do modulo nao mudarem; se o -srv trocar de rota,
+          # atualizar aqui.
+          instance:
+            existing_destinations_policy: update
+            destinations:
+              - Name: srv-api
+                URL: https://megawork-consultoria-e-sistemas-ltda-448qnbxzt6gcd4x5-d24f9d9f4.cfapps.eu10.hana.ondemand.com
+                Type: HTTP
+                Authentication: NoAuthentication
+                ProxyType: Internet
+                HTML5.ForwardAuthToken: true
+                HTML5.DynamicDestination: true
+          subaccount:
+            existing_destinations_policy: update
+            destinations:
+              - Name: srv-api
+                URL: https://megawork-consultoria-e-sistemas-ltda-448qnbxzt6gcd4x5-d24f9d9f4.cfapps.eu10.hana.ondemand.com
+                Type: HTTP
+                Authentication: NoAuthentication
+                ProxyType: Internet
+                HTML5.ForwardAuthToken: true
+                HTML5.DynamicDestination: true
+    requires:
+      - name: srv-api
+
+  - name: mw-monitor-chamados-html5-repo-host
+    type: org.cloudfoundry.managed-service
+    parameters:
+      service: html5-apps-repo
+      service-plan: app-host
