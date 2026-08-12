@@ -168,3 +168,78 @@
     min-width: 1.375rem;
     margin-left: -1.0rem;
 }
+
+/* ==========================================================================
+   Modulo Chats - regras ESTRUTURAIS apenas (altura, scroll, regioes fixas).
+   Nenhuma regra de aparencia de conversa mora aqui: as bolhas, a quebra de
+   texto longo e o texto secundario continuam vindo integralmente das classes
+   .mwChatLinha / .mwChatBolhaEntrada / .mwChatBolhaSaida / .mwChatTextoQuebra
+   / .mwLegenda ja declaradas acima, reutilizadas como estao. O que falta a
+   elas e so o esqueleto: as duas colunas do Splitter precisam ocupar a altura
+   inteira, e a rolagem precisa acontecer em UM unico lugar (as mensagens),
+   com cabecalho e barra de envio ancorados.
+   ========================================================================== */
+
+/* As duas colunas do layout:Splitter. O min-width: 0 e obrigatorio pelo mesmo
+   motivo do .mwChatLinha: como flex item, a coluna assumiria min-width auto -
+   a largura do conteudo mais largo (nome do chat, ultima mensagem) - se
+   recusaria a encolher e estouraria o Splitter na horizontal em vez de deixar
+   o texto truncar. O height: 100% e o que permite as regioes internas se
+   distribuirem por altura em vez de colapsarem no tamanho do conteudo. */
+.mwChatsColuna {
+    box-sizing: border-box;
+    height: 100%;
+    min-width: 0;
+}
+
+/* Topo da coluna esquerda (titulo + SearchField): flex-shrink 0 para o
+   cabecalho nao ser comprimido conforme a lista de chats cresce; ele e regiao
+   fixa, quem cede espaco e a lista. */
+.mwChatsListaCabecalho {
+    box-sizing: border-box;
+    flex-shrink: 0;
+    padding: 0.75rem 1rem;
+    border-bottom: 0.0625rem solid var(--sapGroup_ContentBorderColor, #d9d9d9);
+}
+
+/* Os dois ScrollContainers rolaveis (lista de chats e area de mensagens).
+   Junto com o FlexItemData growFactor 1 / baseSize 0% do markup, o
+   min-height: 0 e o que faz o scroll acontecer AQUI e nao na coluna inteira:
+   sem ele o flex item assume min-height auto, ou seja, a altura total do
+   conteudo, e a barra de rolagem sobe para o container errado - produzindo o
+   scroll duplo que a especificacao proibe e levando junto o cabecalho e a
+   barra de envio, que deveriam ficar parados. */
+.mwChatsListaScroll,
+.mwChatsAreaMensagens {
+    min-height: 0;
+}
+
+/* VBox de texto do item da lista e do cabecalho da conversa. Mesmo papel do
+   .mwCockpitRecenteItem: o Title e nowrap, entao sem min-width: 0 esta VBox
+   nao encolheria e empurraria o horario/contador de nao lidas para fora da
+   linha, em vez de truncar o nome com reticencias. */
+.mwChatsItemTexto {
+    min-width: 0;
+}
+
+/* Cabecalho da conversa (nome, departamento, Acoes, Informacoes): regiao fixa
+   no topo da coluna direita - so a area de mensagens rola sob ele, por isso
+   precisa de fundo proprio e de nao encolher. */
+.mwChatsCabecalho {
+    box-sizing: border-box;
+    flex-shrink: 0;
+    padding: 0.5rem 1rem;
+    border-bottom: 0.0625rem solid var(--sapGroup_ContentBorderColor, #d9d9d9);
+    background-color: var(--sapBaseColor, #ffffff);
+}
+
+/* Barra de envio (anexo + campo + enviar) ancorada no rodape da coluna: o
+   flex-shrink 0 impede que ela seja esmagada - e o campo de digitacao fique
+   inalcancavel - quando a conversa e longa. */
+.mwChatsBarraEnvio {
+    box-sizing: border-box;
+    flex-shrink: 0;
+    padding: 0.5rem 1rem;
+    border-top: 0.0625rem solid var(--sapGroup_ContentBorderColor, #d9d9d9);
+    background-color: var(--sapBaseColor, #ffffff);
+}
