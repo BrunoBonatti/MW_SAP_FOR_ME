@@ -170,6 +170,11 @@ sap.ui.define([
 
     const oCockpitDateTimeFormat = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
 
+    // Chats (mock): autor das mensagens enviadas pelo proprio usuario. E DADO da mensagem
+    // (aparece dentro da bolha como o "autor" das notas do DetalheChamado), nao rotulo de UI -
+    // por isso nao vem do i18n.
+    const AUTOR_MENSAGEM_PROPRIA = "Eu";
+
     return Controller.extend("megawork.mwmonitorchamados.controller.Main", {
 
         _bExpanded: true,
@@ -186,7 +191,14 @@ sap.ui.define([
                 detalheHeaderExpandido: true,
                 // Lista de recentes do cockpit: a List do card binda nesta propriedade, entao ela
                 // precisa nascer como array vazio (senao o binding comeca em undefined).
-                cockpitRecentes: []
+                cockpitRecentes: [],
+                // Modulo Chats (mock, sem OData): chatLista alimenta a List da coluna esquerda,
+                // chatMensagens a List da conversa e chatSelecionado controla os dois estados da
+                // coluna direita (vazio x conversa). Nascem preenchidos/array vazio porque as Lists
+                // bindam neles desde o primeiro render.
+                chatLista: this._criarChatsMock(),
+                chatSelecionado: null,
+                chatMensagens: []
             }), "view");
 
             // O array de anexos vem novo: Object.assign copia a REFERENCIA do array do default
@@ -2459,28 +2471,31 @@ sap.ui.define([
         // E-mail do usuario logado via UserInfo do shell (Work Zone). Resolve null quando o app
         // roda fora do launchpad ou o servico falha - nunca rejeita.
         _lerUsuarioLogado() {
+            // TESTE: usando email fixo temporariamente
+            return Promise.resolve(EMAIL_LOCAL_DEV);
+
             // PROVISORIO: com o botao ligado o shell e ignorado e o app se apresenta ao backend
             // como EMAIL_LOCAL_DEV. Ver onAlternarEmailLocal.
-            if (this._bEmailLocal) {
-                Log.warning("E-mail local ligado: usando " + EMAIL_LOCAL_DEV + " no lugar do usuario do shell",
-                    undefined, "megawork.mwmonitorchamados.controller.Main");
-                return Promise.resolve(EMAIL_LOCAL_DEV);
-            }
+            // if (this._bEmailLocal) {
+            //     Log.warning("E-mail local ligado: usando " + EMAIL_LOCAL_DEV + " no lugar do usuario do shell",
+            //         undefined, "megawork.mwmonitorchamados.controller.Main");
+            //     return Promise.resolve(EMAIL_LOCAL_DEV);
+            // }
 
-            if (typeof sap === "undefined" || !sap.ushell?.Container) {
-                // App rodando fora do Fiori Launchpad, sap.ushell nao existe.
-                Log.warning("Shell do launchpad indisponivel; o backend resolve o usuario pelo JWT",
-                    undefined, "megawork.mwmonitorchamados.controller.Main");
-                return Promise.resolve(null);
-            }
+            // if (typeof sap === "undefined" || !sap.ushell?.Container) {
+            //     // App rodando fora do Fiori Launchpad, sap.ushell nao existe.
+            //     Log.warning("Shell do launchpad indisponivel; o backend resolve o usuario pelo JWT",
+            //         undefined, "megawork.mwmonitorchamados.controller.Main");
+            //     return Promise.resolve(null);
+            // }
 
-            return sap.ushell.Container.getServiceAsync("UserInfo")
-                .then((oUserInfoService) => oUserInfoService.getUser().getEmail() || null)
-                .catch((oError) => {
-                    Log.error("Falha ao ler o usuario logado no shell", oError,
-                        "megawork.mwmonitorchamados.controller.Main");
-                    return null;
-                });
+            // return sap.ushell.Container.getServiceAsync("UserInfo")
+            //     .then((oUserInfoService) => oUserInfoService.getUser().getEmail() || null)
+            //     .catch((oError) => {
+            //         Log.error("Falha ao ler o usuario logado no shell", oError,
+            //             "megawork.mwmonitorchamados.controller.Main");
+            //         return null;
+            //     });
         },
 
         _carregarRequisitante() {
@@ -2825,6 +2840,276 @@ sap.ui.define([
             const sIso = this._paraIsoLocal(vData);
 
             return sIso ? oCockpitDateTimeFormat.format(new Date(sIso)) : "";
+        },
+
+        // ---- Chats (mock) ----
+        // Modulo 100% local: nao ha OData por tras. Toda a leitura/escrita acontece no model
+        // "view" (/chatLista, /chatSelecionado, /chatMensagens), declarado no onInit.
+
+        onChatSelect(oEvent) {
+            const oItem = oEvent.getParameter("listItem");
+            if (!oItem) {
+                return;
+            }
+
+            const oContext = oItem.getBindingContext("view");
+            if (!oContext) {
+                return;
+            }
+
+            const oChat = oContext.getObject();
+            const oModel = this.getView().getModel("view");
+
+            oModel.setProperty("/chatSelecionado", oChat);
+            oModel.setProperty("/chatMensagens", oChat.mensagens ?? []);
+
+            // Zera as nao lidas pelo PATH do contexto: a lista pode estar filtrada pelo
+            // SearchField, entao o indice visual nao corresponde ao indice do array.
+            oModel.setProperty(oContext.getPath() + "/naoLidas", 0);
+
+            this.byId("chatsMensagensScroll")?.scrollTo(0, 99999, 0);
+        },
+
+        // Atende os eventos search e liveChange do mesmo SearchField: um deles traz "query",
+        // o outro "newValue".
+        onChatSearch(oEvent) {
+            const sBusca = (oEvent.getParameter("query") ?? oEvent.getParameter("newValue") ?? "").trim();
+            const oBinding = this.byId("chatsList")?.getBinding("items");
+
+            if (!oBinding) {
+                return;
+            }
+
+            if (!sBusca) {
+                oBinding.filter([]);
+                return;
+            }
+
+            oBinding.filter([new Filter({
+                filters: [
+                    new Filter("nome", FilterOperator.Contains, sBusca),
+                    new Filter("departamento", FilterOperator.Contains, sBusca),
+                    new Filter("ultimaMensagem", FilterOperator.Contains, sBusca)
+                ],
+                and: false
+            })]);
+        },
+
+        onChatEnviarMensagem() {
+            const oInput = this.byId("chatsInputMensagem");
+            const sTexto = (oInput?.getValue() ?? "").trim();
+
+            if (!sTexto) {
+                return;
+            }
+
+            const oModel = this.getView().getModel("view");
+            const oChat = oModel.getProperty("/chatSelecionado");
+
+            if (!oChat) {
+                return;
+            }
+
+            const oMensagem = {
+                id: "m" + Date.now(),
+                autor: AUTOR_MENSAGEM_PROPRIA,
+                texto: sTexto,
+                quando: this._agoraIso(),
+                eu: true
+            };
+
+            // Array novo: push in place nao reavalia o binding da List de mensagens.
+            const aMensagens = (oModel.getProperty("/chatMensagens") ?? []).concat([oMensagem]);
+
+            oModel.setProperty("/chatMensagens", aMensagens);
+
+            // Reflete na linha da lista da esquerda (previa + horario) pelo path resolvido por ID.
+            const sPath = this._pathDoChatPorId(oChat.id);
+
+            if (sPath) {
+                oModel.setProperty(sPath + "/mensagens", aMensagens);
+                oModel.setProperty(sPath + "/ultimaMensagem", sTexto);
+                oModel.setProperty(sPath + "/dataHora", oMensagem.quando);
+            }
+
+            oInput.setValue("");
+
+            this.byId("chatsMensagensScroll")?.scrollTo(0, 99999, 0);
+        },
+
+        onChatAnexar() {
+            MessageToast.show(this._getResourceBundle().getText("chatsAcaoIndisponivel"));
+        },
+
+        onChatAcoes() {
+            MessageToast.show(this._getResourceBundle().getText("chatsAcaoIndisponivel"));
+        },
+
+        onChatInformacoes() {
+            MessageToast.show(this._getResourceBundle().getText("chatsAcaoIndisponivel"));
+        },
+
+        // Espelha _pathDoChamadoPorId: a lista pode estar filtrada ou reordenada, entao gravar
+        // num indice fixo escreveria na linha de outro chat.
+        _pathDoChatPorId(sId) {
+            if (!sId) {
+                return null;
+            }
+
+            const aChats = this.getView().getModel("view").getProperty("/chatLista") ?? [];
+            const iIndice = aChats.findIndex((oChat) => oChat.id === sId);
+
+            return iIndice < 0 ? null : "/chatLista/" + iIndice;
+        },
+
+        // Devolve um ARRAY NOVO a cada chamada (literal montado aqui dentro, sem constante de
+        // modulo compartilhada): uma constante seria a MESMA referencia em toda recarga do
+        // modelo, e as escritas do chat vazariam entre elas - mesma pegadinha de
+        // NOVO_CHAMADO_DEFAULTS/_resetNovoChamado.
+        // Forma do chat:     { id, nome, departamento, ultimaMensagem, dataHora, naoLidas, mensagens }
+        // Forma da mensagem: { id, autor, texto, quando, eu } - os mesmos nomes do chat do
+        // DetalheChamado, para o markup e formatter.dataAbertura serem identicos.
+        _criarChatsMock() {
+            return [{
+                id: "c1",
+                nome: "Suporte N1",
+                departamento: "Infraestrutura",
+                ultimaMensagem: "Consegue tentar acessar de novo e confirmar?",
+                dataHora: "2026-08-12T09:41:00",
+                naoLidas: 2,
+                mensagens: [{
+                    id: "c1m1",
+                    autor: "Suporte N1",
+                    texto: "Bom dia! Recebemos o alerta de indisponibilidade do servidor de arquivos.",
+                    quando: "2026-08-12T08:52:00",
+                    eu: false
+                }, {
+                    id: "c1m2",
+                    autor: AUTOR_MENSAGEM_PROPRIA,
+                    texto: "Bom dia. Aqui na filial ninguem consegue abrir a pasta compartilhada desde ontem à noite.",
+                    quando: "2026-08-12T09:03:00",
+                    eu: true
+                }, {
+                    id: "c1m3",
+                    autor: "Suporte N1",
+                    texto: "Obrigado pelo retorno. Identificamos que o serviço de compartilhamento caiu durante a "
+                        + "janela de manutenção da madrugada e o reinício automático falhou por falta de espaço em "
+                        + "disco no volume de logs. Já liberamos espaço, subimos o serviço novamente e estamos "
+                        + "monitorando o consumo pelas próximas horas para garantir que não volte a acontecer.",
+                    quando: "2026-08-12T09:28:00",
+                    eu: false
+                }, {
+                    id: "c1m4",
+                    autor: "Suporte N1",
+                    texto: "Consegue tentar acessar de novo e confirmar?",
+                    quando: "2026-08-12T09:41:00",
+                    eu: false
+                }]
+            }, {
+                id: "c2",
+                nome: "Financeiro",
+                departamento: "Contas a pagar",
+                ultimaMensagem: "A nota fiscal entrou na programação desta sexta.",
+                dataHora: "2026-08-12T08:15:00",
+                naoLidas: 1,
+                mensagens: [{
+                    id: "c2m1",
+                    autor: AUTOR_MENSAGEM_PROPRIA,
+                    texto: "Oi, consegue verificar o status do pagamento do fornecedor Delta?",
+                    quando: "2026-08-11T16:40:00",
+                    eu: true
+                }, {
+                    id: "c2m2",
+                    autor: "Financeiro",
+                    texto: "Verifico sim. O documento está em aprovação com a gerência.",
+                    quando: "2026-08-11T17:05:00",
+                    eu: false
+                }, {
+                    id: "c2m3",
+                    autor: "Financeiro",
+                    texto: "A nota fiscal entrou na programação desta sexta.",
+                    quando: "2026-08-12T08:15:00",
+                    eu: false
+                }]
+            }, {
+                id: "c3",
+                nome: "Ana Paula Souza",
+                departamento: "Recursos Humanos",
+                ultimaMensagem: "Perfeito, obrigado pelo envio!",
+                dataHora: "2026-08-11T17:52:00",
+                naoLidas: 0,
+                mensagens: [{
+                    id: "c3m1",
+                    autor: "Ana Paula Souza",
+                    texto: "Boa tarde! Preciso do comprovante de horas do mês passado.",
+                    quando: "2026-08-11T15:12:00",
+                    eu: false
+                }, {
+                    id: "c3m2",
+                    autor: AUTOR_MENSAGEM_PROPRIA,
+                    texto: "Boa tarde, Ana. Acabei de anexar o relatório no chamado 8801.",
+                    quando: "2026-08-11T17:30:00",
+                    eu: true
+                }, {
+                    id: "c3m3",
+                    autor: "Ana Paula Souza",
+                    texto: "Perfeito, obrigado pelo envio!",
+                    quando: "2026-08-11T17:52:00",
+                    eu: false
+                }]
+            }, {
+                id: "c4",
+                nome: "Time de Integrações",
+                departamento: "TI",
+                ultimaMensagem: "Vamos reprocessar a fila hoje à noite.",
+                dataHora: "2026-08-11T14:30:00",
+                naoLidas: 0,
+                mensagens: [{
+                    id: "c4m1",
+                    autor: AUTOR_MENSAGEM_PROPRIA,
+                    texto: "Pessoal, a integração de pedidos parou de gravar por volta das 11h.",
+                    quando: "2026-08-11T11:48:00",
+                    eu: true
+                }, {
+                    id: "c4m2",
+                    autor: "Time de Integrações",
+                    texto: "Confirmado. O certificado do middleware venceu e derrubou a autenticação.",
+                    quando: "2026-08-11T12:22:00",
+                    eu: false
+                }, {
+                    id: "c4m3",
+                    autor: AUTOR_MENSAGEM_PROPRIA,
+                    texto: "Tem previsão para normalizar?",
+                    quando: "2026-08-11T13:10:00",
+                    eu: true
+                }, {
+                    id: "c4m4",
+                    autor: "Time de Integrações",
+                    texto: "Vamos reprocessar a fila hoje à noite.",
+                    quando: "2026-08-11T14:30:00",
+                    eu: false
+                }]
+            }, {
+                id: "c5",
+                nome: "Central de Atendimento",
+                departamento: "Qualidade",
+                ultimaMensagem: "Pesquisa de satisfação respondida, obrigado.",
+                dataHora: "2026-08-10T16:05:00",
+                naoLidas: 0,
+                mensagens: [{
+                    id: "c5m1",
+                    autor: "Central de Atendimento",
+                    texto: "Olá! Poderia avaliar o atendimento do chamado 8790?",
+                    quando: "2026-08-10T14:20:00",
+                    eu: false
+                }, {
+                    id: "c5m2",
+                    autor: AUTOR_MENSAGEM_PROPRIA,
+                    texto: "Pesquisa de satisfação respondida, obrigado.",
+                    quando: "2026-08-10T16:05:00",
+                    eu: true
+                }]
+            }];
         }
     });
 });

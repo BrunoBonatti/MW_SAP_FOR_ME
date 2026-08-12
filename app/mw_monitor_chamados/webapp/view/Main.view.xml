@@ -65,6 +65,10 @@
                         key="acompanharChamados"
                         text="{i18n>sideContentTrackTickets}"
                         icon="sap-icon://list" />
+                    <tnt:NavigationListItem
+                        key="chats"
+                        text="{i18n>sideContentChats}"
+                        icon="sap-icon://discussion-2" />
                 </tnt:NavigationList>
             </tnt:SideNavigation>
         </tnt:sideContent>
@@ -300,6 +304,19 @@
                         <content>
                             <core:Fragment
                                 fragmentName="megawork.mwmonitorchamados.view.DetalheChamado"
+                                type="XML" />
+                        </content>
+                    </Page>
+                    <!-- Chats: modulo de conversas (mock). Layout master/detail proprio dentro do
+                         fragment; a Page nao rola (enableScrolling="false") porque o unico scroll
+                         e o da area de mensagens, dentro do Chats.fragment.xml. -->
+                    <Page
+                        id="chats"
+                        showHeader="false"
+                        enableScrolling="false">
+                        <content>
+                            <core:Fragment
+                                fragmentName="megawork.mwmonitorchamados.view.Chats"
                                 type="XML" />
                         </content>
                     </Page>
