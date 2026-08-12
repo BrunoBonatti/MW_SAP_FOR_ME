@@ -198,7 +198,10 @@ sap.ui.define([
                 // bindam neles desde o primeiro render.
                 chatLista: this._criarChatsMock(),
                 chatSelecionado: null,
-                chatMensagens: []
+                chatMensagens: [],
+                // Alimenta o busy da List da conversa. Nasce false porque a List binda nele desde
+                // o primeiro render (binding em undefined nunca sai do estado ocupado).
+                chatCarregando: false
             }), "view");
 
             // O array de anexos vem novo: Object.assign copia a REFERENCIA do array do default
@@ -2860,8 +2863,15 @@ sap.ui.define([
             const oChat = oContext.getObject();
             const oModel = this.getView().getModel("view");
 
+            // O ciclo do chatCarregando espelha o do chatCarregando do detalhe e existe para a
+            // List da conversa ter onde pendurar o busy. Com as mensagens vindo do mock em
+            // memoria, o true e o false acontecem no mesmo tick e nada aparece na tela - o fio
+            // fica pronto para quando /chatMensagens passar a vir de servico, sem precisar mexer
+            // no fragmento de novo.
+            oModel.setProperty("/chatCarregando", true);
             oModel.setProperty("/chatSelecionado", oChat);
             oModel.setProperty("/chatMensagens", oChat.mensagens ?? []);
+            oModel.setProperty("/chatCarregando", false);
 
             // Zera as nao lidas pelo PATH do contexto: a lista pode estar filtrada pelo
             // SearchField, entao o indice visual nao corresponde ao indice do array.
@@ -2895,9 +2905,11 @@ sap.ui.define([
             })]);
         },
 
-        onChatEnviarMensagem() {
-            const oInput = this.byId("chatsInputMensagem");
-            const sTexto = (oInput?.getValue() ?? "").trim();
+        // Handler do post do FeedInput da barra de envio, igual ao onDetalheEnviarMensagem: o
+        // texto vem no parametro "value" do evento, e nao de um campo lido por ID - o FeedInput
+        // limpa o proprio value depois de postar, por isso aqui nao se zera campo nenhum.
+        onChatEnviarMensagem(oEvent) {
+            const sTexto = (oEvent.getParameter("value") || "").trim();
 
             if (!sTexto) {
                 return;
@@ -2932,13 +2944,7 @@ sap.ui.define([
                 oModel.setProperty(sPath + "/dataHora", oMensagem.quando);
             }
 
-            oInput.setValue("");
-
             this.byId("chatsMensagensScroll")?.scrollTo(0, 99999, 0);
-        },
-
-        onChatAnexar() {
-            MessageToast.show(this._getResourceBundle().getText("chatsAcaoIndisponivel"));
         },
 
         onChatAcoes() {
