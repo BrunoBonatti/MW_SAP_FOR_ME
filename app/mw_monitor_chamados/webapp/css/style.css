@@ -387,3 +387,18 @@
     border-top: 0.0625rem solid var(--sapGroup_ContentBorderColor, #d9d9d9);
     background-color: var(--sapBaseColor, #ffffff);
 }
+
+/* Linha divisoria entre os blocos do menu lateral (Home / Atendimento Interno /
+   Solicitacoes de suporte SAP). O NavigationListGroup ja renderiza um <li
+   class="sapTntNLSeparator"> antes do primeiro grupo e depois de cada grupo, mas no
+   Horizon esse li so reserva espaco vertical (min-height: 0.625rem) e nao desenha
+   traco nenhum - por isso os grupos apareciam sem separacao visivel. Aqui o mesmo li
+   ganha a borda; o espaco antes ocupado pelo min-height passa a vir das margens, que
+   tambem afastam a linha do texto do grupo. O tema ja esconde o separador final
+   (.sapTntNL > .sapTntNLSeparator:last-child), entao nao sobra linha solta no fim da
+   lista. Classe interna do sap.tnt, so cosmetico. */
+.sapTntNL .sapTntNLSeparator {
+    min-height: 0;
+    margin: 0.5rem 0.75rem;
+    border-top: 0.0625rem solid var(--sapGroup_ContentBorderColor, #d9d9d9);
+}
