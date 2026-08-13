@@ -22,8 +22,9 @@
         class="sapUiResponsivePadding--header sapUiResponsivePadding--content">
 
         <!-- Tipo e prioridade nao tem campo. O tipo e travado no controller (SRRQ) e o resumo do
-             passo 4 mostra um texto fixo; a prioridade fica no model novoChamado com o default
-             NORMAL e so aparece no mesmo resumo. -->
+             passo 4 mostra um texto fixo; a prioridade e derivada de Impacto/Urgencia (ver
+             MATRIZ_PRIORIDADE_CHAMADO/onImpactoUrgenciaChange no controller) e nunca aparece na
+             tela - so vai no ServicePriorityCode do C4C. -->
         <WizardStep
             id="stepClassificacao"
             title="{i18n>criarChamadoWizStep1}"
@@ -68,6 +69,30 @@
                         id="selectClienteChamado"
                         selectedKey="{novoChamado>/cliente}"
                         items="{codelists>/clientes}"
+                        width="100%">
+                        <core:Item key="{codelists>code}" text="{codelists>descricao}" />
+                    </Select>
+
+                    <Label
+                        text="{i18n>criarChamadoImpacto}"
+                        labelFor="selectImpactoChamado" />
+                    <Select
+                        id="selectImpactoChamado"
+                        selectedKey="{novoChamado>/impacto}"
+                        items="{codelists>/impactosChamado}"
+                        change=".onImpactoUrgenciaChange"
+                        width="100%">
+                        <core:Item key="{codelists>code}" text="{codelists>descricao}" />
+                    </Select>
+
+                    <Label
+                        text="{i18n>criarChamadoUrgencia}"
+                        labelFor="selectUrgenciaChamado" />
+                    <Select
+                        id="selectUrgenciaChamado"
+                        selectedKey="{novoChamado>/urgencia}"
+                        items="{codelists>/urgenciasChamado}"
+                        change=".onImpactoUrgenciaChange"
                         width="100%">
                         <core:Item key="{codelists>code}" text="{codelists>descricao}" />
                     </Select>
@@ -223,8 +248,6 @@
             title="{i18n>criarChamadoWizStep4}"
             icon="sap-icon://validate">
             <VBox width="100%">
-                <!-- Nao usar prioridadeState/prioridadeIcone aqui: eles esperam os codes do C4C
-                     (1/2/3/7), e o formulario usa IMEDIATA/URGENTE/NORMAL/BAIXA. -->
                 <form:SimpleForm
                     editable="false"
                     layout="ResponsiveGridLayout"
@@ -248,15 +271,9 @@
                     <Label text="{i18n>criarChamadoTipo}" />
                     <Text text="{i18n>tipoChamadoSRRQ}" />
 
-                    <Label text="{i18n>criarChamadoPrioridade}" />
-                    <Text
-                        text="{
-                        parts: [
-                            {path: 'novoChamado>/prioridade'},
-                            {path: 'codelists>/prioridadesChamado'}
-                        ],
-                        formatter: 'fmt.codelistTexto'
-                    }" />
+                    <!-- Prioridade nao aparece aqui de proposito: e calculada por
+                         MATRIZ_PRIORIDADE_CHAMADO (Impacto x Urgencia, ver onImpactoUrgenciaChange)
+                         so para preencher o ServicePriorityCode do C4C - o cliente nunca a ve. -->
 
                     <!-- Contagem, nao nome: com N arquivos a linha unica de nome nao serve. O
                          padrao {0} vem cru do ResourceBundle e quem substitui e o formatter. -->
@@ -280,6 +297,26 @@
                         parts: [
                             {path: 'novoChamado>/cliente'},
                             {path: 'codelists>/clientes'}
+                        ],
+                        formatter: 'fmt.codelistTexto'
+                    }" />
+
+                    <Label text="{i18n>criarChamadoImpacto}" />
+                    <Text
+                        text="{
+                        parts: [
+                            {path: 'novoChamado>/impacto'},
+                            {path: 'codelists>/impactosChamado'}
+                        ],
+                        formatter: 'fmt.codelistTexto'
+                    }" />
+
+                    <Label text="{i18n>criarChamadoUrgencia}" />
+                    <Text
+                        text="{
+                        parts: [
+                            {path: 'novoChamado>/urgencia'},
+                            {path: 'codelists>/urgenciasChamado'}
                         ],
                         formatter: 'fmt.codelistTexto'
                     }" />

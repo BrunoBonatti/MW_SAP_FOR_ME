@@ -65,5 +65,33 @@
       "code": "BAIXA",
       "descricao": "Baixa"
     }
+  ],
+  "impactosChamado": [
+    {
+      "code": "BAIXO",
+      "descricao": "Baixo"
+    },
+    {
+      "code": "MEDIO",
+      "descricao": "Médio"
+    },
+    {
+      "code": "ALTO",
+      "descricao": "Alto"
+    }
+  ],
+  "urgenciasChamado": [
+    {
+      "code": "BAIXA",
+      "descricao": "Baixa"
+    },
+    {
+      "code": "MEDIA",
+      "descricao": "Média"
+    },
+    {
+      "code": "ALTA",
+      "descricao": "Alta"
+    }
   ]
 }
