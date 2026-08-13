@@ -19,6 +19,15 @@ sap.ui.define([
         BAIXA: "7"
     };
 
+    // Matriz ITIL Impacto x Urgencia -> Prioridade do chamado. Calculada no wizard, nunca
+    // escolhida pelo cliente: ele so ve Impacto/Urgencia, a Prioridade resultante e o que vai
+    // no ServicePriorityCode do C4C (ver PRIORIDADE_CHAMADO_PARA_C4C) e some do resumo da tela.
+    const MATRIZ_PRIORIDADE_CHAMADO = {
+        ALTO: { BAIXA: "NORMAL", MEDIA: "URGENTE", ALTA: "IMEDIATA" },
+        MEDIO: { BAIXA: "BAIXA", MEDIA: "NORMAL", ALTA: "URGENTE" },
+        BAIXO: { BAIXA: "BAIXA", MEDIA: "BAIXA", ALTA: "NORMAL" }
+    };
+
     // Timeline: WHITELIST de ObjectNodeElementName -> rótulo exibido na Timeline.
     // Reproduz a aba "Alterações" do Sales Cloud: dos ~74 registros técnicos que o
     // /ChangeDocuments devolve, SO os nomes desta tabela viram linha. Qualquer outro nome é
@@ -126,6 +135,8 @@ sap.ui.define([
         contato: "",
         titulo: "",
         prioridade: "NORMAL",
+        impacto: "MEDIO",
+        urgencia: "MEDIA",
         descricao: "",
         anexos: []
     };
@@ -2293,6 +2304,17 @@ sap.ui.define([
             }
 
             return (iValor / (1024 * 1024)).toFixed(1).replace(".", ",") + " MB";
+        },
+
+        // Impacto/Urgencia sao os dois selects que o cliente realmente preenche; a Prioridade
+        // e so o resultado da MATRIZ_PRIORIDADE_CHAMADO, recalculada aqui e gravada no model -
+        // nunca exposta como campo proprio na tela do cliente.
+        onImpactoUrgenciaChange() {
+            const sImpacto = this.byId("selectImpactoChamado").getSelectedKey();
+            const sUrgencia = this.byId("selectUrgenciaChamado").getSelectedKey();
+            const sPrioridade = (MATRIZ_PRIORIDADE_CHAMADO[sImpacto] || {})[sUrgencia] || "NORMAL";
+
+            this.getView().getModel("novoChamado").setProperty("/prioridade", sPrioridade);
         },
 
         onDetalhesLiveChange(oEvent) {
