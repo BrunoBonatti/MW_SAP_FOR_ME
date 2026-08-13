@@ -175,11 +175,22 @@ sap.ui.define([
     // por isso nao vem do i18n.
     const AUTOR_MENSAGEM_PROPRIA = "Eu";
 
+    // As duas telas de acompanhamento ("Acompanhar chamados" e "Acompanhar chamados SAP") sao o
+    // mesmo par de fragments duplicado, com os mesmos handlers: o sufixo abaixo e o que distingue
+    // uma da outra em TODO lugar - id de pagina (acompanharChamados + sufixo), key do menu lateral
+    // (a mesma string), ids dos controles dentro dos fragments e chave do estado de filtro/ordem.
+    // Sufixo "" = a tela original (C4C).
+    const SUFIXOS_ACOMPANHAMENTO = ["", "Sap"];
+
     return Controller.extend("megawork.mwmonitorchamados.controller.Main", {
 
         _bExpanded: true,
 
-        _bSortDescending: false,
+        // Sufixo da tela de detalhe aberta no momento ("" ou "Sap"). Gravado por
+        // _abrirDetalheDoChamado e lido por _idDetalhe: e o que faz os handlers do detalhe (chat,
+        // anexos, historico, acoes) mexerem na pagina certa, ja que os dois fragments do detalhe
+        // compartilham handler.
+        _sSufixoDetalhe: "",
 
         onInit() {
             this.getView().setModel(new JSONModel({
@@ -201,7 +212,16 @@ sap.ui.define([
                 chatMensagens: [],
                 // Alimenta o busy da List da conversa. Nasce false porque a List binda nele desde
                 // o primeiro render (binding em undefined nunca sai do estado ocupado).
-                chatCarregando: false
+                chatCarregando: false,
+                // Modulo "Chat com SAP" (mock): copia do bloco acima com sufixo Sap. As duas telas
+                // usam os mesmos handlers e PRECISAM de estado separado - com as mesmas
+                // propriedades, selecionar uma conversa numa trocaria a conversa aberta na outra.
+                // _criarChatsMock devolve um array novo a cada chamada, entao as duas listas nao
+                // compartilham referencia (ver o comentario da funcao).
+                chatListaSap: this._criarChatsMock(),
+                chatSelecionadoSap: null,
+                chatMensagensSap: [],
+                chatCarregandoSap: false
             }), "view");
 
             // O array de anexos vem novo: Object.assign copia a REFERENCIA do array do default
@@ -209,12 +229,20 @@ sap.ui.define([
             this.getView().setModel(
                 new JSONModel(Object.assign({}, NOVO_CHAMADO_DEFAULTS, { anexos: [] })), "novoChamado");
 
-            this._mTicketFilters = {
-                search: null,
-                status: null,
-                prioridade: null,
-                data: null
-            };
+            // Filtros e ordem POR TELA de acompanhamento: as duas listam tickets>/Tickets, mas cada
+            // uma tem seu proprio binding - filtrar/ordenar numa nao pode mexer na outra.
+            this._mEstadoAcompanhamento = {};
+            SUFIXOS_ACOMPANHAMENTO.forEach((sSufixo) => {
+                this._mEstadoAcompanhamento[sSufixo] = {
+                    filtros: {
+                        search: null,
+                        status: null,
+                        prioridade: null,
+                        data: null
+                    },
+                    ordemDescendente: false
+                };
+            });
 
             if (this.byId("toolPage") && Device.resize.width <= 1024) {
                 this.onSideNavButtonPress();
@@ -344,11 +372,23 @@ sap.ui.define([
             }
         },
 
+        // Daqui até onTicketPressSap: handlers das DUAS telas de acompanhamento. Cada par
+        // on*/on*Sap so escolhe o sufixo e delega para a implementacao comum, que resolve os
+        // controles (id + sufixo) e o estado de filtro/ordem daquela tela.
         onSearchTickets(oEvent) {
+            this._filtrarChamadosPorTexto(oEvent, "");
+        },
+
+        onSearchTicketsSap(oEvent) {
+            this._filtrarChamadosPorTexto(oEvent, "Sap");
+        },
+
+        _filtrarChamadosPorTexto(oEvent, sSufixo) {
             const sQuery = oEvent.getParameter("query") ?? oEvent.getParameter("newValue") ?? "";
+            const oFiltros = this._filtrosDaTela(sSufixo);
 
             if (sQuery) {
-                this._mTicketFilters.search = new Filter({
+                oFiltros.search = new Filter({
                     filters: [
                         new Filter("titulo", FilterOperator.Contains, sQuery),
                         new Filter("ID", FilterOperator.Contains, sQuery),
@@ -357,69 +397,108 @@ sap.ui.define([
                     and: false
                 });
             } else {
-                this._mTicketFilters.search = null;
+                oFiltros.search = null;
             }
 
-            this._applyTicketFilters();
+            this._applyTicketFilters(sSufixo);
         },
 
         onFilterTickets() {
-            const sStatus = this.byId("selectStatus").getSelectedKey();
-            const sPrioridade = this.byId("selectPrioridade").getSelectedKey();
+            this._filtrarChamados("");
+        },
 
-            this._mTicketFilters.status = sStatus
+        onFilterTicketsSap() {
+            this._filtrarChamados("Sap");
+        },
+
+        _filtrarChamados(sSufixo) {
+            const sStatus = this.byId("selectStatus" + sSufixo).getSelectedKey();
+            const sPrioridade = this.byId("selectPrioridade" + sSufixo).getSelectedKey();
+            const oFiltros = this._filtrosDaTela(sSufixo);
+
+            oFiltros.status = sStatus
                 ? new Filter("status", FilterOperator.EQ, sStatus)
                 : null;
-            this._mTicketFilters.prioridade = sPrioridade
+            oFiltros.prioridade = sPrioridade
                 ? new Filter("prioridade", FilterOperator.EQ, sPrioridade)
                 : null;
 
-            this._applyTicketFilters();
+            this._applyTicketFilters(sSufixo);
         },
 
         onFilterDataAbertura() {
-            const oDRS = this.byId("drsDataAbertura");
+            this._filtrarChamadosPorData("");
+        },
+
+        onFilterDataAberturaSap() {
+            this._filtrarChamadosPorData("Sap");
+        },
+
+        _filtrarChamadosPorData(sSufixo) {
+            const oDRS = this.byId("drsDataAbertura" + sSufixo);
             const oFrom = oDRS.getDateValue();
             const oTo = oDRS.getSecondDateValue();
+            const oFiltros = this._filtrosDaTela(sSufixo);
 
             if (oFrom && oTo) {
-                this._mTicketFilters.data = new Filter(
+                oFiltros.data = new Filter(
                     "dataAbertura",
                     FilterOperator.BT,
                     this._toComparableIso(oFrom, false),
                     this._toComparableIso(oTo, true)
                 );
             } else {
-                this._mTicketFilters.data = null;
+                oFiltros.data = null;
             }
 
-            this._applyTicketFilters();
+            this._applyTicketFilters(sSufixo);
         },
 
         onSortTickets() {
-            this._bSortDescending = !this._bSortDescending;
+            this._ordenarChamados("");
+        },
 
-            const oBinding = this.byId("ticketsTable").getBinding("items");
+        onSortTicketsSap() {
+            this._ordenarChamados("Sap");
+        },
+
+        _ordenarChamados(sSufixo) {
+            const oEstado = this._estadoDaTela(sSufixo);
+
+            oEstado.ordemDescendente = !oEstado.ordemDescendente;
+
+            const oBinding = this.byId("ticketsTable" + sSufixo).getBinding("items");
             if (oBinding) {
-                oBinding.sort(new Sorter("dataAbertura", this._bSortDescending));
+                oBinding.sort(new Sorter("dataAbertura", oEstado.ordemDescendente));
             }
         },
 
         onRefreshTickets() {
-            this.byId("searchTickets")?.setValue("");
-            this.byId("selectStatus")?.setSelectedKey("");
-            this.byId("selectPrioridade")?.setSelectedKey("");
+            this._recarregarChamados("");
+        },
 
-            const oDRS = this.byId("drsDataAbertura");
+        onRefreshTicketsSap() {
+            this._recarregarChamados("Sap");
+        },
+
+        // Limpa os filtros SO da tela que pediu o refresh; a releitura em si (_carregarTickets) e
+        // compartilhada, porque as duas telas mostram a mesma lista.
+        _recarregarChamados(sSufixo) {
+            this.byId("searchTickets" + sSufixo)?.setValue("");
+            this.byId("selectStatus" + sSufixo)?.setSelectedKey("");
+            this.byId("selectPrioridade" + sSufixo)?.setSelectedKey("");
+
+            const oDRS = this.byId("drsDataAbertura" + sSufixo);
             if (oDRS) {
                 oDRS.setDateValue(null);
                 oDRS.setSecondDateValue(null);
             }
 
-            Object.keys(this._mTicketFilters).forEach((sKey) => {
-                this._mTicketFilters[sKey] = null;
+            const oFiltros = this._filtrosDaTela(sSufixo);
+            Object.keys(oFiltros).forEach((sKey) => {
+                oFiltros[sKey] = null;
             });
-            this._applyTicketFilters();
+            this._applyTicketFilters(sSufixo);
 
             this._carregarTickets().then((bOk) => {
                 if (bOk) {
@@ -429,25 +508,46 @@ sap.ui.define([
         },
 
         onTicketPress(oEvent) {
+            this._abrirChamadoDaTabela(oEvent, "");
+        },
+
+        onTicketPressSap(oEvent) {
+            this._abrirChamadoDaTabela(oEvent, "Sap");
+        },
+
+        _abrirChamadoDaTabela(oEvent, sSufixo) {
             const oContext = oEvent.getSource().getBindingContext("tickets");
 
             if (!oContext) {
                 return;
             }
 
-            this._abrirDetalheDoChamado(oContext);
+            this._abrirDetalheDoChamado(oContext, sSufixo);
+        },
+
+        _estadoDaTela(sSufixo) {
+            return this._mEstadoAcompanhamento[sSufixo ?? ""];
+        },
+
+        _filtrosDaTela(sSufixo) {
+            return this._estadoDaTela(sSufixo).filtros;
         },
 
         // Recebe um Context DO MODELO "tickets" (nao um path solto): _carregarChatDoTicket e
         // _lerMudancasDoC4C leem oContext.getModel()/getPath() e gravam flags na propria linha.
-        _abrirDetalheDoChamado(oContext) {
+        // sSufixo escolhe o par lista/detalhe do fluxo que abriu o chamado ("" = C4C, "Sap" =
+        // Acompanhar chamados SAP) e passa a valer para TODOS os handlers do detalhe, que resolvem
+        // seus ids por _idDetalhe enquanto a tela estiver aberta.
+        _abrirDetalheDoChamado(oContext, sSufixo) {
             const oViewModel = this.getView().getModel("view");
 
             if (!oContext) {
                 return;
             }
 
-            this.byId("detalheChamado").bindElement({
+            this._sSufixoDetalhe = sSufixo ?? "";
+
+            this._paginaDetalhe().bindElement({
                 path: oContext.getPath(),
                 model: "tickets"
             });
@@ -456,13 +556,13 @@ sap.ui.define([
             oViewModel.setProperty("/detalheEdicao", false);
             oViewModel.setProperty("/detalheHeaderExpandido", true);
 
-            this.byId("mainContents").to(this.createId("detalheChamado"));
+            this.byId("mainContents").to(this.createId(this._idDetalhe("detalheChamado")));
 
             // O menu lateral acompanha a tela: o breadcrumb do detalhe (onDetalheVoltar) sempre
-            // volta para "Acompanhar Chamados", entao entrar pelo cockpit sem mexer no selectedKey
+            // volta para a lista do fluxo, entao entrar pelo cockpit sem mexer no selectedKey
             // deixaria "Home" marcado sobre a lista de chamados. Vindo da propria tabela, isso ja
             // esta correto e o set e inofensivo.
-            this.byId("sideNavigation")?.setSelectedKey("acompanharChamados");
+            this.byId("sideNavigation")?.setSelectedKey(this._idDetalhe("acompanharChamados"));
 
             // Depois do .to(): a tela abre na hora e chat/historico/anexos chegam quando a rede
             // responder.
@@ -591,10 +691,16 @@ sap.ui.define([
             const oComponent = this.getOwnerComponent();
             const oModel = oComponent.getModel();
             const oTicketsModel = oComponent.getModel("tickets");
-            const oTable = this.byId("ticketsTable");
+            // As duas telas de acompanhamento mostram a MESMA lista: o busy vai nas duas tabelas,
+            // senao a que nao pediu o refresh continuaria exibindo dados velhos sem indicacao.
+            const aTabelas = SUFIXOS_ACOMPANHAMENTO
+                .map((sSufixo) => this.byId("ticketsTable" + sSufixo))
+                .filter(Boolean);
 
-            oTable?.setBusyIndicatorDelay(0);
-            oTable?.setBusy(true);
+            aTabelas.forEach((oTable) => {
+                oTable.setBusyIndicatorDelay(0);
+                oTable.setBusy(true);
+            });
 
             const aFiltros = [];
             if (this._sRequisitanteContatoId) {
@@ -623,7 +729,7 @@ sap.ui.define([
 
                 return false;
             }).finally(() => {
-                oTable?.setBusy(false);
+                aTabelas.forEach((oTable) => oTable.setBusy(false));
                 oBinding.destroy();
             });
         },
@@ -710,14 +816,24 @@ sap.ui.define([
 
         onDetalheVoltar() {
             this.getView().getModel("view")?.setProperty("/detalheEdicao", false);
-            this.byId("mainContents").to(this.createId("acompanharChamados"));
+            this.byId("mainContents").to(this.createId(this._idDetalhe("acompanharChamados")));
+        },
+
+        // Id do controle/pagina do detalhe ABERTO no momento: os dois fragments do detalhe usam os
+        // mesmos handlers e os ids do segundo sao os do primeiro + "Sap".
+        _idDetalhe(sId) {
+            return sId + this._sSufixoDetalhe;
+        },
+
+        _paginaDetalhe() {
+            return this.byId(this._idDetalhe("detalheChamado"));
         },
 
         // Botao de refresh do header do detalhe: releitura de TUDO que o detalhe cacheia por linha
         // (campos core, chat, historico e anexos), em paralelo, com busy no proprio botao.
         onDetalheAtualizar() {
-            const oButton = this.byId("detalheRefreshButton");
-            const oContext = this.byId("detalheChamado").getBindingContext("tickets");
+            const oButton = this.byId(this._idDetalhe("detalheRefreshButton"));
+            const oContext = this._paginaDetalhe().getBindingContext("tickets");
 
             if (!oContext) {
                 return;
@@ -995,7 +1111,7 @@ sap.ui.define([
         },
 
         _ehChamadoNoDetalhe(sId) {
-            const oContext = this.byId("detalheChamado")?.getBindingContext("tickets");
+            const oContext = this._paginaDetalhe()?.getBindingContext("tickets");
 
             return Boolean(sId) && String(oContext?.getProperty("ID") ?? "").trim() === sId;
         },
@@ -1662,7 +1778,7 @@ sap.ui.define([
         // releitura no fim, que e o que da objectID - logo, download - as linhas que subiram.
         onDetalheAnexoAdicionar(oEvent) {
             const oUploader = oEvent.getSource();
-            const oContext = this.byId("detalheChamado").getBindingContext("tickets");
+            const oContext = this._paginaDetalhe().getBindingContext("tickets");
 
             if (!oContext) {
                 return;
@@ -1850,7 +1966,7 @@ sap.ui.define([
                 return Promise.resolve(false);
             }
 
-            const oContext = this.byId("detalheChamado")?.getBindingContext("tickets");
+            const oContext = this._paginaDetalhe()?.getBindingContext("tickets");
 
             if (!oContext) {
                 return Promise.resolve(false);
@@ -1870,7 +1986,7 @@ sap.ui.define([
         },
 
         onDetalheEscalonar() {
-            const oContext = this.byId("detalheChamado").getBindingContext("tickets");
+            const oContext = this._paginaDetalhe().getBindingContext("tickets");
 
             if (!oContext) {
                 return;
@@ -1896,7 +2012,7 @@ sap.ui.define([
         },
 
         onDetalheFinalizarChamado() {
-            const oContext = this.byId("detalheChamado").getBindingContext("tickets");
+            const oContext = this._paginaDetalhe().getBindingContext("tickets");
 
             if (!oContext) {
                 return;
@@ -1906,7 +2022,7 @@ sap.ui.define([
         },
 
         onDetalheCancelarChamado() {
-            const oContext = this.byId("detalheChamado").getBindingContext("tickets");
+            const oContext = this._paginaDetalhe().getBindingContext("tickets");
 
             if (!oContext) {
                 return;
@@ -2713,13 +2829,13 @@ sap.ui.define([
             return (oPorId && aSteps.indexOf(oPorId) >= 0) ? oPorId : aSteps[iPasso - 1];
         },
 
-        _applyTicketFilters() {
-            const oBinding = this.byId("ticketsTable").getBinding("items");
+        _applyTicketFilters(sSufixo) {
+            const oBinding = this.byId("ticketsTable" + (sSufixo ?? "")).getBinding("items");
             if (!oBinding) {
                 return;
             }
 
-            const aActiveFilters = Object.values(this._mTicketFilters).filter(Boolean);
+            const aActiveFilters = Object.values(this._filtrosDaTela(sSufixo)).filter(Boolean);
 
             oBinding.filter(aActiveFilters.length
                 ? new Filter({ filters: aActiveFilters, and: true })
@@ -2848,8 +2964,21 @@ sap.ui.define([
         // ---- Chats (mock) ----
         // Modulo 100% local: nao ha OData por tras. Toda a leitura/escrita acontece no model
         // "view" (/chatLista, /chatSelecionado, /chatMensagens), declarado no onInit.
+        // Duas telas com o MESMO codigo: "Chats" (sufixo "") e "Chat com SAP" (sufixo "Sap"). O
+        // sufixo entra tanto nos ids dos controles quanto no nome das propriedades do modelo, entao
+        // cada tela tem lista, conversa selecionada e mensagens proprias. onChatAcoes e
+        // onChatInformacoes ficam sem variante *Sap de proposito: sao toasts sem estado e os dois
+        // fragments apontam para eles.
 
         onChatSelect(oEvent) {
+            this._selecionarChat(oEvent, "");
+        },
+
+        onChatSelectSap(oEvent) {
+            this._selecionarChat(oEvent, "Sap");
+        },
+
+        _selecionarChat(oEvent, sSufixo) {
             const oItem = oEvent.getParameter("listItem");
             if (!oItem) {
                 return;
@@ -2868,23 +2997,31 @@ sap.ui.define([
             // memoria, o true e o false acontecem no mesmo tick e nada aparece na tela - o fio
             // fica pronto para quando /chatMensagens passar a vir de servico, sem precisar mexer
             // no fragmento de novo.
-            oModel.setProperty("/chatCarregando", true);
-            oModel.setProperty("/chatSelecionado", oChat);
-            oModel.setProperty("/chatMensagens", oChat.mensagens ?? []);
-            oModel.setProperty("/chatCarregando", false);
+            oModel.setProperty("/chatCarregando" + sSufixo, true);
+            oModel.setProperty("/chatSelecionado" + sSufixo, oChat);
+            oModel.setProperty("/chatMensagens" + sSufixo, oChat.mensagens ?? []);
+            oModel.setProperty("/chatCarregando" + sSufixo, false);
 
             // Zera as nao lidas pelo PATH do contexto: a lista pode estar filtrada pelo
             // SearchField, entao o indice visual nao corresponde ao indice do array.
             oModel.setProperty(oContext.getPath() + "/naoLidas", 0);
 
-            this.byId("chatsMensagensScroll")?.scrollTo(0, 99999, 0);
+            this.byId("chatsMensagensScroll" + sSufixo)?.scrollTo(0, 99999, 0);
         },
 
         // Atende os eventos search e liveChange do mesmo SearchField: um deles traz "query",
         // o outro "newValue".
         onChatSearch(oEvent) {
+            this._buscarChats(oEvent, "");
+        },
+
+        onChatSearchSap(oEvent) {
+            this._buscarChats(oEvent, "Sap");
+        },
+
+        _buscarChats(oEvent, sSufixo) {
             const sBusca = (oEvent.getParameter("query") ?? oEvent.getParameter("newValue") ?? "").trim();
-            const oBinding = this.byId("chatsList")?.getBinding("items");
+            const oBinding = this.byId("chatsList" + sSufixo)?.getBinding("items");
 
             if (!oBinding) {
                 return;
@@ -2909,6 +3046,14 @@ sap.ui.define([
         // texto vem no parametro "value" do evento, e nao de um campo lido por ID - o FeedInput
         // limpa o proprio value depois de postar, por isso aqui nao se zera campo nenhum.
         onChatEnviarMensagem(oEvent) {
+            this._enviarMensagemDoChat(oEvent, "");
+        },
+
+        onChatEnviarMensagemSap(oEvent) {
+            this._enviarMensagemDoChat(oEvent, "Sap");
+        },
+
+        _enviarMensagemDoChat(oEvent, sSufixo) {
             const sTexto = (oEvent.getParameter("value") || "").trim();
 
             if (!sTexto) {
@@ -2916,7 +3061,7 @@ sap.ui.define([
             }
 
             const oModel = this.getView().getModel("view");
-            const oChat = oModel.getProperty("/chatSelecionado");
+            const oChat = oModel.getProperty("/chatSelecionado" + sSufixo);
 
             if (!oChat) {
                 return;
@@ -2931,12 +3076,12 @@ sap.ui.define([
             };
 
             // Array novo: push in place nao reavalia o binding da List de mensagens.
-            const aMensagens = (oModel.getProperty("/chatMensagens") ?? []).concat([oMensagem]);
+            const aMensagens = (oModel.getProperty("/chatMensagens" + sSufixo) ?? []).concat([oMensagem]);
 
-            oModel.setProperty("/chatMensagens", aMensagens);
+            oModel.setProperty("/chatMensagens" + sSufixo, aMensagens);
 
             // Reflete na linha da lista da esquerda (previa + horario) pelo path resolvido por ID.
-            const sPath = this._pathDoChatPorId(oChat.id);
+            const sPath = this._pathDoChatPorId(oChat.id, sSufixo);
 
             if (sPath) {
                 oModel.setProperty(sPath + "/mensagens", aMensagens);
@@ -2944,7 +3089,7 @@ sap.ui.define([
                 oModel.setProperty(sPath + "/dataHora", oMensagem.quando);
             }
 
-            this.byId("chatsMensagensScroll")?.scrollTo(0, 99999, 0);
+            this.byId("chatsMensagensScroll" + sSufixo)?.scrollTo(0, 99999, 0);
         },
 
         onChatAcoes() {
@@ -2957,15 +3102,16 @@ sap.ui.define([
 
         // Espelha _pathDoChamadoPorId: a lista pode estar filtrada ou reordenada, entao gravar
         // num indice fixo escreveria na linha de outro chat.
-        _pathDoChatPorId(sId) {
+        _pathDoChatPorId(sId, sSufixo) {
             if (!sId) {
                 return null;
             }
 
-            const aChats = this.getView().getModel("view").getProperty("/chatLista") ?? [];
+            const sLista = "/chatLista" + (sSufixo ?? "");
+            const aChats = this.getView().getModel("view").getProperty(sLista) ?? [];
             const iIndice = aChats.findIndex((oChat) => oChat.id === sId);
 
-            return iIndice < 0 ? null : "/chatLista/" + iIndice;
+            return iIndice < 0 ? null : sLista + "/" + iIndice;
         },
 
         // Devolve um ARRAY NOVO a cada chamada (literal montado aqui dentro, sem constante de

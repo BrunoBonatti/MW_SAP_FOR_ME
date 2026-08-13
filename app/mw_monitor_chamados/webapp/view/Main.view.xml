@@ -52,23 +52,43 @@
                 expanded="true"
                 selectedKey="home"
                 itemSelect=".onItemSelect">
+                <!-- Menu em grupos (NavigationListGroup): "Home" solta no topo e os demais itens
+                     separados por origem do atendimento - interno (C4C proprio) e SAP. O grupo so
+                     agrupa visualmente: o itemSelect continua vindo do NavigationListItem, entao
+                     as keys TEM de seguir iguais aos ids das paginas do NavContainer. -->
                 <tnt:NavigationList id="navigationList">
                     <tnt:NavigationListItem
                         key="home"
                         text="{i18n>sideContentHome}"
                         icon="sap-icon://home" />
-                    <tnt:NavigationListItem
-                        key="criarChamado"
-                        text="{i18n>sideContentCreateTicket}"
-                        icon="sap-icon://add-document" />
-                    <tnt:NavigationListItem
-                        key="acompanharChamados"
-                        text="{i18n>sideContentTrackTickets}"
-                        icon="sap-icon://list" />
-                    <tnt:NavigationListItem
-                        key="chats"
-                        text="{i18n>sideContentChats}"
-                        icon="sap-icon://discussion-2" />
+                    <tnt:NavigationListGroup
+                        id="navGroupInterno"
+                        text="{i18n>sideContentGroupInternal}">
+                        <tnt:NavigationListItem
+                            key="criarChamado"
+                            text="{i18n>sideContentCreateTicket}"
+                            icon="sap-icon://add-document" />
+                        <tnt:NavigationListItem
+                            key="acompanharChamados"
+                            text="{i18n>sideContentTrackTickets}"
+                            icon="sap-icon://list" />
+                        <tnt:NavigationListItem
+                            key="chats"
+                            text="{i18n>sideContentChats}"
+                            icon="sap-icon://discussion-2" />
+                    </tnt:NavigationListGroup>
+                    <tnt:NavigationListGroup
+                        id="navGroupSap"
+                        text="{i18n>sideContentGroupSap}">
+                        <tnt:NavigationListItem
+                            key="acompanharChamadosSap"
+                            text="{i18n>sideContentTrackTicketsSap}"
+                            icon="sap-icon://sap-logo-shape" />
+                        <tnt:NavigationListItem
+                            key="chatsSap"
+                            text="{i18n>sideContentChatSap}"
+                            icon="sap-icon://comment" />
+                    </tnt:NavigationListGroup>
                 </tnt:NavigationList>
             </tnt:SideNavigation>
         </tnt:sideContent>
@@ -307,6 +327,31 @@
                                 type="XML" />
                         </content>
                     </Page>
+                    <!-- Acompanhar chamados SAP: copia da dupla acima (lista + detalhe) para o item
+                         "Acompanhar chamados SAP" do menu. Os ids das paginas TEM de ser
+                         "acompanharChamadosSap"/"detalheChamadoSap": onItemSelect navega por
+                         createId(key) e os handlers do detalhe montam o id da pagina somando o
+                         sufixo "Sap" (ver _idDetalhe no Main.controller.js). -->
+                    <Page
+                        id="acompanharChamadosSap"
+                        showHeader="false"
+                        class="sapUiResponsiveContentPadding">
+                        <content>
+                            <core:Fragment
+                                fragmentName="megawork.mwmonitorchamados.view.AcompanharChamadosSap"
+                                type="XML" />
+                        </content>
+                    </Page>
+                    <Page
+                        id="detalheChamadoSap"
+                        showHeader="false"
+                        enableScrolling="false">
+                        <content>
+                            <core:Fragment
+                                fragmentName="megawork.mwmonitorchamados.view.DetalheChamadoSap"
+                                type="XML" />
+                        </content>
+                    </Page>
                     <!-- Chats: modulo de conversas (mock). Layout master/detail proprio dentro do
                          fragment; a Page nao rola (enableScrolling="false") porque o unico scroll
                          e o da area de mensagens, dentro do Chats.fragment.xml. -->
@@ -317,6 +362,19 @@
                         <content>
                             <core:Fragment
                                 fragmentName="megawork.mwmonitorchamados.view.Chats"
+                                type="XML" />
+                        </content>
+                    </Page>
+                    <!-- Chat com SAP: copia do modulo Chats (mesmas funcionalidades, estado
+                         proprio no modelo "view"). Id da pagina = key do item do menu, como todas
+                         as outras (onItemSelect navega por createId(key)). -->
+                    <Page
+                        id="chatsSap"
+                        showHeader="false"
+                        enableScrolling="false">
+                        <content>
+                            <core:Fragment
+                                fragmentName="megawork.mwmonitorchamados.view.ChatsSap"
                                 type="XML" />
                         </content>
                     </Page>
