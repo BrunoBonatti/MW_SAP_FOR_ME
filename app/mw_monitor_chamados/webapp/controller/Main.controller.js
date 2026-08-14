@@ -138,7 +138,7 @@ sap.ui.define([
     // PROVISORIO (homologacao): e-mail assumido no lugar do usuario do shell quando o botao
     // "e-mail local" do ToolHeader esta ligado. Trocar o valor aqui para testar como outro
     // requisitante. Sai junto com o botao quando o app for para producao.
-    const EMAIL_LOCAL_DEV = "bruno.bonatti@megawork.com";
+    const EMAIL_LOCAL_DEV = "bruno.bonatti@megawork-gft.com.br";
 
     const EMAIL_LOCAL_DEV_EDI = "edislaine.silva@megawork.com";
 
