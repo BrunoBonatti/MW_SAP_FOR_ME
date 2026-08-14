@@ -22,9 +22,10 @@
         class="sapUiResponsivePadding--header sapUiResponsivePadding--content">
 
         <!-- Tipo e prioridade nao tem campo. O tipo e travado no controller (SRRQ) e o resumo do
-             passo 4 mostra um texto fixo; a prioridade e derivada de Impacto/Urgencia (ver
-             MATRIZ_PRIORIDADE_CHAMADO/onImpactoUrgenciaChange no controller) e nunca aparece na
-             tela - so vai no ServicePriorityCode do C4C. -->
+             passo 4 mostra um texto fixo; a prioridade e derivada dos MultiComboBox de Ambiente/
+             sistema afetado e O que pode ser afetado (ver FAIXAS_PRIORIDADE_POR_PONTUACAO/
+             onAreasImpactoChange no controller) e nunca aparece na tela - so vai no
+             ServicePriorityCode do C4C. -->
         <WizardStep
             id="stepClassificacao"
             title="{i18n>criarChamadoWizStep1}"
@@ -74,28 +75,28 @@
                     </Select>
 
                     <Label
-                        text="{i18n>criarChamadoImpacto}"
-                        labelFor="selectImpactoChamado" />
-                    <Select
-                        id="selectImpactoChamado"
-                        selectedKey="{novoChamado>/impacto}"
-                        items="{codelists>/impactosChamado}"
-                        change=".onImpactoUrgenciaChange"
+                        text="{i18n>criarChamadoAreaAfetada}"
+                        labelFor="mcbAreasAfetadasChamado" />
+                    <MultiComboBox
+                        id="mcbAreasAfetadasChamado"
+                        items="{codelists>/areasAfetadasChamado}"
+                        selectedKeys="{novoChamado>/areasAfetadas}"
+                        selectionChange=".onAreasImpactoChange"
                         width="100%">
                         <core:Item key="{codelists>code}" text="{codelists>descricao}" />
-                    </Select>
+                    </MultiComboBox>
 
                     <Label
-                        text="{i18n>criarChamadoUrgencia}"
-                        labelFor="selectUrgenciaChamado" />
-                    <Select
-                        id="selectUrgenciaChamado"
-                        selectedKey="{novoChamado>/urgencia}"
-                        items="{codelists>/urgenciasChamado}"
-                        change=".onImpactoUrgenciaChange"
+                        text="{i18n>criarChamadoTipoImpacto}"
+                        labelFor="mcbTiposImpactoChamado" />
+                    <MultiComboBox
+                        id="mcbTiposImpactoChamado"
+                        items="{codelists>/tiposImpactoChamado}"
+                        selectedKeys="{novoChamado>/tiposImpacto}"
+                        selectionChange=".onAreasImpactoChange"
                         width="100%">
                         <core:Item key="{codelists>code}" text="{codelists>descricao}" />
-                    </Select>
+                    </MultiComboBox>
 
                     <!-- Rotulo "Requisitante" sobre novoChamado>/contato: o nome da propriedade e
                          do dado gravado pelo controller, nao do texto de tela. -->
@@ -271,9 +272,9 @@
                     <Label text="{i18n>criarChamadoTipo}" />
                     <Text text="{i18n>tipoChamadoSRRQ}" />
 
-                    <!-- Prioridade nao aparece aqui de proposito: e calculada por
-                         MATRIZ_PRIORIDADE_CHAMADO (Impacto x Urgencia, ver onImpactoUrgenciaChange)
-                         so para preencher o ServicePriorityCode do C4C - o cliente nunca a ve. -->
+                    <!-- Prioridade nao aparece aqui de proposito: e calculada por pontuacao
+                         (ver FAIXAS_PRIORIDADE_POR_PONTUACAO/onAreasImpactoChange) so para
+                         preencher o ServicePriorityCode do C4C - o cliente nunca a ve. -->
 
                     <!-- Contagem, nao nome: com N arquivos a linha unica de nome nao serve. O
                          padrao {0} vem cru do ResourceBundle e quem substitui e o formatter. -->
@@ -301,24 +302,24 @@
                         formatter: 'fmt.codelistTexto'
                     }" />
 
-                    <Label text="{i18n>criarChamadoImpacto}" />
+                    <Label text="{i18n>criarChamadoAreaAfetada}" />
                     <Text
                         text="{
                         parts: [
-                            {path: 'novoChamado>/impacto'},
-                            {path: 'codelists>/impactosChamado'}
+                            {path: 'novoChamado>/areasAfetadas'},
+                            {path: 'codelists>/areasAfetadasChamado'}
                         ],
-                        formatter: 'fmt.codelistTexto'
+                        formatter: 'fmt.codelistTextoMultiplo'
                     }" />
 
-                    <Label text="{i18n>criarChamadoUrgencia}" />
+                    <Label text="{i18n>criarChamadoTipoImpacto}" />
                     <Text
                         text="{
                         parts: [
-                            {path: 'novoChamado>/urgencia'},
-                            {path: 'codelists>/urgenciasChamado'}
+                            {path: 'novoChamado>/tiposImpacto'},
+                            {path: 'codelists>/tiposImpactoChamado'}
                         ],
-                        formatter: 'fmt.codelistTexto'
+                        formatter: 'fmt.codelistTextoMultiplo'
                     }" />
 
                     <Label text="{i18n>criarChamadoRequisitante}" />

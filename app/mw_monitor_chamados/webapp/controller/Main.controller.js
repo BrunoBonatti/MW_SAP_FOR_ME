@@ -19,14 +19,18 @@ sap.ui.define([
         BAIXA: "7"
     };
 
-    // Matriz ITIL Impacto x Urgencia -> Prioridade do chamado. Calculada no wizard, nunca
-    // escolhida pelo cliente: ele so ve Impacto/Urgencia, a Prioridade resultante e o que vai
-    // no ServicePriorityCode do C4C (ver PRIORIDADE_CHAMADO_PARA_C4C) e some do resumo da tela.
-    const MATRIZ_PRIORIDADE_CHAMADO = {
-        ALTO: { BAIXA: "NORMAL", MEDIA: "URGENTE", ALTA: "IMEDIATA" },
-        MEDIO: { BAIXA: "BAIXA", MEDIA: "NORMAL", ALTA: "URGENTE" },
-        BAIXO: { BAIXA: "BAIXA", MEDIA: "BAIXA", ALTA: "NORMAL" }
-    };
+    // Prioridade do chamado por pontuacao: o cliente marca opcoes (MultiComboBox) de "Ambiente/sistema
+    // afetado" e "O que pode ser afetado" (codelists>/areasAfetadasChamado e
+    // .../tiposImpactoChamado, cada opcao com um peso). A soma dos pesos marcados e enquadrada
+    // aqui numa faixa; a Prioridade resultante e o que vai no ServicePriorityCode do C4C (ver
+    // PRIORIDADE_CHAMADO_PARA_C4C) e some do resumo da tela. Calculada no wizard, nunca
+    // escolhida pelo cliente diretamente (ver onAreasImpactoChange).
+    const FAIXAS_PRIORIDADE_POR_PONTUACAO = [
+        { min: 9, prioridade: "IMEDIATA" },
+        { min: 7, prioridade: "URGENTE" },
+        { min: 4, prioridade: "NORMAL" },
+        { min: 0, prioridade: "BAIXA" }
+    ];
 
     // Timeline: WHITELIST de ObjectNodeElementName -> rótulo exibido na Timeline.
     // Reproduz a aba "Alterações" do Sales Cloud: dos ~74 registros técnicos que o
@@ -134,9 +138,9 @@ sap.ui.define([
         cliente: "",
         contato: "",
         titulo: "",
-        prioridade: "NORMAL",
-        impacto: "MEDIO",
-        urgencia: "MEDIA",
+        prioridade: "BAIXA",
+        areasAfetadas: [],
+        tiposImpacto: [],
         descricao: "",
         anexos: []
     };
@@ -235,10 +239,11 @@ sap.ui.define([
                 chatCarregandoSap: false
             }), "view");
 
-            // O array de anexos vem novo: Object.assign copia a REFERENCIA do array do default
+            // Os arrays vem novos: Object.assign copia a REFERENCIA dos arrays do default
             // (ver _resetNovoChamado, mesma pegadinha).
             this.getView().setModel(
-                new JSONModel(Object.assign({}, NOVO_CHAMADO_DEFAULTS, { anexos: [] })), "novoChamado");
+                new JSONModel(Object.assign({}, NOVO_CHAMADO_DEFAULTS,
+                    { anexos: [], areasAfetadas: [], tiposImpacto: [] })), "novoChamado");
 
             // Filtros e ordem POR TELA de acompanhamento: as duas listam tickets>/Tickets, mas cada
             // uma tem seu proprio binding - filtrar/ordenar numa nao pode mexer na outra.
@@ -2306,15 +2311,42 @@ sap.ui.define([
             return (iValor / (1024 * 1024)).toFixed(1).replace(".", ",") + " MB";
         },
 
-        // Impacto/Urgencia sao os dois selects que o cliente realmente preenche; a Prioridade
-        // e so o resultado da MATRIZ_PRIORIDADE_CHAMADO, recalculada aqui e gravada no model -
-        // nunca exposta como campo proprio na tela do cliente.
-        onImpactoUrgenciaChange() {
-            const sImpacto = this.byId("selectImpactoChamado").getSelectedKey();
-            const sUrgencia = this.byId("selectUrgenciaChamado").getSelectedKey();
-            const sPrioridade = (MATRIZ_PRIORIDADE_CHAMADO[sImpacto] || {})[sUrgencia] || "NORMAL";
+        // Ambiente/sistema afetado e O que pode ser afetado sao os dois MultiComboBox que o
+        // cliente realmente marca; selectedKeys ja e TwoWay com novoChamado>/areasAfetadas e
+        // .../tiposImpacto (atualizado pelo proprio controle antes do selectionChange disparar),
+        // entao so falta recalcular a Prioridade - resultado da soma dos pesos marcados enquadrada
+        // em FAIXAS_PRIORIDADE_POR_PONTUACAO, gravada no model e nunca exposta como campo proprio
+        // na tela do cliente.
+        onAreasImpactoChange() {
+            this._recalcularPrioridadeChamado();
+        },
 
-            this.getView().getModel("novoChamado").setProperty("/prioridade", sPrioridade);
+        _recalcularPrioridadeChamado() {
+            const oNovoChamado = this.getView().getModel("novoChamado");
+            const oCodelists = this.getOwnerComponent().getModel("codelists");
+
+            const iPontuacao = this._pontuacaoOpcoesMarcadas(
+                oNovoChamado.getProperty("/areasAfetadas"),
+                oCodelists.getProperty("/areasAfetadasChamado")
+            ) + this._pontuacaoOpcoesMarcadas(
+                oNovoChamado.getProperty("/tiposImpacto"),
+                oCodelists.getProperty("/tiposImpactoChamado")
+            );
+
+            const oFaixa = FAIXAS_PRIORIDADE_POR_PONTUACAO.find((o) => iPontuacao >= o.min);
+
+            oNovoChamado.setProperty("/prioridade", oFaixa ? oFaixa.prioridade : "BAIXA");
+        },
+
+        _pontuacaoOpcoesMarcadas(aCodesMarcados, aCodelist) {
+            if (!Array.isArray(aCodesMarcados) || !Array.isArray(aCodelist)) {
+                return 0;
+            }
+
+            return aCodesMarcados.reduce((iSoma, sCode) => {
+                const oOpcao = aCodelist.find((o) => o.code === sCode);
+                return iSoma + (oOpcao ? Number(oOpcao.peso) || 0 : 0);
+            }, 0);
         },
 
         onDetalhesLiveChange(oEvent) {
@@ -2594,10 +2626,10 @@ sap.ui.define([
         },
 
         _resetNovoChamado() {
-            // Object.assign copia a REFERENCIA do array de anexos do default: sem o array novo aqui,
-            // dois chamados seguidos compartilhariam a mesma lista de pendentes.
+            // Object.assign copia a REFERENCIA dos arrays do default: sem os arrays novos aqui,
+            // dois chamados seguidos compartilhariam a mesma lista de pendentes/marcacoes.
             this.getView().getModel("novoChamado").setData(
-                Object.assign({}, NOVO_CHAMADO_DEFAULTS, { anexos: [] }));
+                Object.assign({}, NOVO_CHAMADO_DEFAULTS, { anexos: [], areasAfetadas: [], tiposImpacto: [] }));
 
             this.byId("inputTituloChamado")?.setValueState("None");
             this.byId("textAreaDescricaoChamado")?.setValueState("None");
