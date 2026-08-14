@@ -155,7 +155,10 @@ sap.ui.define([
         areasAfetadas: [],
         tiposImpacto: [],
         descricao: "",
-        anexos: []
+        anexos: [],
+        // {id, chave, descricao} do componente escolhido em onSelecionarComponenteSap, ou null
+        // se o requisitante nao selecionou nenhum (campo opcional).
+        componenteSap: null
     };
 
     const WIZARD_ID = "wizardCriarChamado";
@@ -249,7 +252,11 @@ sap.ui.define([
                 chatListaSap: this._criarChatsMock(),
                 chatSelecionadoSap: null,
                 chatMensagensSap: [],
-                chatCarregandoSap: false
+                chatCarregandoSap: false,
+                // Preenchido em _carregarRequisitante a partir de _sRequisitanteOrigem: controla
+                // a visibilidade da coluna Prioridade (Acompanhar Chamados/SAP) e a aba Criar
+                // chamado no menu lateral. Nasce false (mesma logica de podeVoltar/podeAvancar).
+                requisitanteEhFuncionario: false
             }), "view");
 
             // Os arrays vem novos: Object.assign copia a REFERENCIA dos arrays do default
@@ -1295,6 +1302,26 @@ sap.ui.define([
 
         onFecharComponentesSap() {
             this.byId("dialogComponentesSap").close();
+        },
+
+        // Clique numa linha da tabela: grava o componente escolhido em novoChamado>/componenteSap
+        // (o id, ex.: "BC-CCM", e o que vai no Z_COMPONENT_SFM_KUT do C4C - ver _criarTicket) e
+        // fecha o dialogo. So o id/chave/descricao sao guardados; produto e obsoleto nao interessam
+        // fora da tabela de busca.
+        onSelecionarComponenteSap(oEvent) {
+            const oComponente = oEvent.getSource().getBindingContext("componentesSap").getObject();
+
+            this.getView().getModel("novoChamado").setProperty("/componenteSap", {
+                id: oComponente.id,
+                chave: oComponente.chave,
+                descricao: oComponente.descricao
+            });
+
+            this.byId("dialogComponentesSap").close();
+        },
+
+        onLimparComponenteSap() {
+            this.getView().getModel("novoChamado").setProperty("/componenteSap", null);
         },
 
         onBuscarComponentesSap(oEvent) {
@@ -2624,6 +2651,10 @@ sap.ui.define([
                 oPayload.BuyerMainContactPartyID = this._sRequisitanteContatoId;
             }
 
+            if (oData.componenteSap?.id) {
+                oPayload.Z_COMPONENT_SFM_KUT = oData.componenteSap.id;
+            }
+
             const oListBinding = oModel.bindList("/ServiceRequests");
             const oContext = oListBinding.create(oPayload, true);
 
@@ -2790,6 +2821,9 @@ sap.ui.define([
                 // Guardada no controller (mesmo padrao de _sRequisitanteNome/_sRequisitanteContatoId)
                 // porque e ela que diz se a ausencia de empresas e esperada ou e motivo de bloqueio.
                 this._sRequisitanteOrigem = oRequisitante.origem ?? "";
+
+                this.getView().getModel("view").setProperty("/requisitanteEhFuncionario",
+                    this._sRequisitanteOrigem === ORIGEM_REQUISITANTE_FUNCIONARIO);
 
                 oCodelists.setProperty("/clientes", aClientes);
                 this._aplicarRequisitante();

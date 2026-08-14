@@ -1,4 +1,4 @@
-/* checksum : a6f284e3c61cd8e0bf8bd9e937fc4835 */
+/* checksum : 12bcf8055aad996ebf27f73f27730d71 */
 @cds.external : true
 @m.IsDefaultEntityContainer : 'true'
 service ticket {
@@ -909,6 +909,10 @@ service ticket {
     @sap.filterable : 'false'
     @sap.label : 'Maintenance Plan Name'
     MaintenancePlanName : String(255);
+    @sap.creatable : 'true'
+    @sap.updatable : 'true'
+    @sap.filterable : 'true'
+    Z_COMPONENT_SFM_KUT : String(40);
     ServiceRequestAttachmentFolder : Association to many ServiceRequestAttachmentFolderCollection {  };
     ServiceRequestBusinessTransactionDocumentReference : Association to many ServiceRequestBusinessTransactionDocumentReferenceCollection {  };
     ServiceRequestHistoricalVersion : Association to many ServiceRequestHistoricalVersionCollection {  };

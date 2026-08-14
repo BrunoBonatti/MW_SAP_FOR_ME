@@ -76,7 +76,9 @@
                             </Column>
                         </columns>
                         <items>
-                            <ColumnListItem>
+                            <ColumnListItem
+                                type="Active"
+                                press=".onSelecionarComponenteSap">
                                 <cells>
                                     <ObjectIdentifier
                                         title="{componentesSap>id}"
@@ -184,12 +186,34 @@
                     <Label
                         text="{i18n>criarChamadoComponenteSap}"
                         labelFor="btnComponentesSap" />
-                    <Button
-                        id="btnComponentesSap"
-                        text="{i18n>criarChamadoComponentesSapBotao}"
-                        icon="sap-icon://search"
-                        press=".onAbrirComponentesSap"
-                        width="100%" />
+                    <HBox width="100%">
+                        <Button
+                            id="btnComponentesSap"
+                            text="{
+                                parts: [
+                                    {path: 'novoChamado>/componenteSap'},
+                                    {path: 'i18n>criarChamadoComponentesSapBotao'}
+                                ],
+                                formatter: 'fmt.componenteSapResumo'
+                            }"
+                            icon="sap-icon://search"
+                            press=".onAbrirComponentesSap"
+                            width="100%">
+                            <layoutData>
+                                <FlexItemData shrinkFactor="0" growFactor="1" />
+                            </layoutData>
+                        </Button>
+                        <Button
+                            visible="{= !!${novoChamado>/componenteSap} }"
+                            icon="sap-icon://decline"
+                            type="Transparent"
+                            tooltip="{i18n>criarChamadoComponentesSapLimpar}"
+                            press=".onLimparComponenteSap">
+                            <layoutData>
+                                <FlexItemData shrinkFactor="0" growFactor="0" />
+                            </layoutData>
+                        </Button>
+                    </HBox>
 
                     <!-- Rotulo "Requisitante" sobre novoChamado>/contato: o nome da propriedade e
                          do dado gravado pelo controller, nao do texto de tela. -->
@@ -417,6 +441,15 @@
 
                     <Label text="{i18n>criarChamadoRequisitante}" />
                     <Text text="{novoChamado>/contato}" />
+
+                    <Label text="{i18n>criarChamadoComponenteSap}" />
+                    <Text text="{
+                        parts: [
+                            {path: 'novoChamado>/componenteSap'},
+                            {path: 'i18n>criarChamadoComponentesSapVazio'}
+                        ],
+                        formatter: 'fmt.componenteSapResumo'
+                    }" />
 
                     <core:Title text="{i18n>criarChamadoDescricao}" />
                     <Text text="{novoChamado>/descricao}" />

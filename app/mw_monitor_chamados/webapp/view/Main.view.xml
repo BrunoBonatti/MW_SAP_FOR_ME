@@ -78,7 +78,8 @@
                         <tnt:NavigationListItem
                             key="criarChamado"
                             text="{i18n>sideContentCreateTicket}"
-                            icon="sap-icon://add-document" />
+                            icon="sap-icon://add-document"
+                            enabled="{= !${view>/requisitanteEhFuncionario} }" />
                         <tnt:NavigationListItem
                             key="acompanharChamados"
                             text="{i18n>sideContentTrackTickets}"
