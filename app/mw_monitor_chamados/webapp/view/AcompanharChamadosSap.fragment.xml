@@ -104,7 +104,9 @@
                         <!-- Colunas e celulas sao posicionais: manter a mesma ordem nas duas
                              agregacoes. Titulo fica sem width para absorver a sobra. -->
                         <columns>
-                            <Column width="9rem">
+                            <Column
+                                width="9rem"
+                                visible="{= ${view>/requisitanteEhFuncionario} }">
                                 <Text text="{i18n>ticketsColPriority}"/>
                             </Column>
                             <Column width="7rem">
@@ -152,6 +154,7 @@
                                     <!-- Prioridade = ServicePriorityCode (eixo de urgencia do C4C),
                                          dominio diferente dos dois status abaixo. -->
                                     <ObjectStatus
+                                        visible="{= ${view>/requisitanteEhFuncionario} }"
                                         inverted="true"
                                         text="{tickets>prioridadeTexto}"
                                         state="{path: 'tickets>prioridade', formatter: 'formatter.prioridadeState'}"

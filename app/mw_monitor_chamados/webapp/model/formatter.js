@@ -435,6 +435,17 @@ sap.ui.define([
                 .replace("{1}", String(iTotal || 0));
         },
 
+        /** Texto do componente SAP escolhido (id - descricao); sPadrao cobre o botao (chamada
+         * para acao) e o passo de revisao (texto de vazio), que usam o mesmo formatter. */
+        componenteSapResumo: function (oComponente, sPadrao) {
+            if (!oComponente || !oComponente.id) {
+                return sPadrao || "";
+            }
+            return oComponente.descricao
+                ? oComponente.id + " - " + oComponente.descricao
+                : oComponente.id;
+        },
+
         /** Alias publico de oDataDeTexto, mantido como API documentada em docs/. */
         _parseData: function (sData) {
             return oDataDeTexto(sData);
