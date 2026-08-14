@@ -323,6 +323,25 @@ sap.ui.define([
             return sCode;
         },
 
+        /** Descricoes de varios codes marcados (MultiComboBox), juntas por virgula; resumo do passo 4. */
+        codelistTextoMultiplo: function (aCodes, aCodelist) {
+            if (!Array.isArray(aCodes) || !aCodes.length || !Array.isArray(aCodelist)) {
+                return "";
+            }
+
+            return aCodes
+                .map(function (sCode) {
+                    for (var i = 0; i < aCodelist.length; i++) {
+                        if (aCodelist[i].code === sCode) {
+                            return aCodelist[i].descricao;
+                        }
+                    }
+                    return "";
+                })
+                .filter(Boolean)
+                .join(", ");
+        },
+
         /** Resumo plural do passo de revisao; o {0} do padrao i18n e substituido aqui. */
         anexosResumo: function (aAnexos, sSemAnexo, sUmArquivo, sVariosArquivos) {
             var iQuantidade = Array.isArray(aAnexos) ? aAnexos.length : 0;
