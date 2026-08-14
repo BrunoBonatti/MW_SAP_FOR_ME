@@ -61,8 +61,14 @@ service IntegrationService {
     nome      : String;
     // ContactID do C4C do requisitante: o app o envia como BuyerMainContactPartyID no
     // create do chamado, para o C4C amarrar o contato solicitante sem nova consulta.
+    // Quando o requisitante vem da EmployeeCollection, aqui vai o BusinessPartnerID dele.
     contatoId : String;
     clientes  : array of Cliente;
+    // Qual das duas fontes respondeu pelo e-mail: 'contato' (ContactQueryByElements, único
+    // caminho que preenche clientes) ou 'funcionario' (EmployeeCollection, consultada só
+    // quando não há contato). Vazio = nenhuma das duas achou; o handler não rejeita nesse
+    // caso, quem bloqueia a tela continua sendo o frontend.
+    origem    : String;
   }
 
   // Não é projection: o achatamento/dedupe das contas acontece no handler, não no modelo.
@@ -98,4 +104,18 @@ service IntegrationService {
   }
 
   function InteracoesDoChamado(objectID : String) returns { interacoes : array of InteracaoChamado };
+
+  type ComponenteSap {
+    id        : String;
+    chave     : String;
+    descricao : String;
+    produto   : String;
+    obsoleto  : Boolean;
+  }
+
+  function ComponentesSap(busca : String) returns {
+    total       : Integer;
+    exibidos    : Integer;
+    componentes : array of ComponenteSap;
+  };
 }

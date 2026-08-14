@@ -429,6 +429,12 @@ sap.ui.define([
             return bSistema ? "#0066CC" : "#4CAF50";
         },
 
+        componentesSapTruncado: function (iExibidos, iTotal, sPadrao) {
+            return String(sPadrao || "")
+                .replace("{0}", String(iExibidos || 0))
+                .replace("{1}", String(iTotal || 0));
+        },
+
         /** Alias publico de oDataDeTexto, mantido como API documentada em docs/. */
         _parseData: function (sData) {
             return oDataDeTexto(sData);

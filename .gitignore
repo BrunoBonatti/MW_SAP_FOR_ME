@@ -46,8 +46,8 @@ Thumbs.db
 # Pasta de referencia local (copia de outro repo)
 APAGAR/
 
-# Skill local de deploy/Work Zone (nao versionada)
-.claude/skills/workzone/
+# Configuracao local do Claude Code (nao versionada)
+.claude/
 
-# Anotacoes locais de estudo (Timeline UI5) - nao carregadas pelo app
-#docs/
+# Anotacoes locais de estudo - nao carregadas pelo app
+docs/

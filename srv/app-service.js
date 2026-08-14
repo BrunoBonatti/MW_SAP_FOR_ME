@@ -33,6 +33,8 @@ const CAMPOS_CRIAVEIS_ANEXO = [
 // quem deduz pela extensao e o C4C.
 const MIME_TYPE_PADRAO_ANEXO = "application/octet-stream";
 
+const LIMITE_COMPONENTES_SAP = 200;
+
 function escaparHtml(texto) {
     return String(texto)
         .replace(/&/g, "&amp;")
@@ -82,6 +84,46 @@ async function binarioComoBuffer(valor) {
     return null;
 }
 
+// Segunda fonte do requisitante, usada so quando a ContactQueryByElements nao devolve contato.
+// Existe porque quem trabalha na propria empresa esta cadastrado como funcionario (Employee) e
+// nao como contato de cliente: sem isso o app bloqueia o proprio time na abertura da tela.
+// Consulta via CQN porque o employeeanduser TEM model EDMX importado - o cliente odata-v2 monta
+// $select/$filter e ja desembrulha o envelope, sem o send() cru que o accountService precisa.
+// Nunca lanca: falha tecnica aqui vale como "nao achou", igual ao bloco do AccountCollection.
+async function buscarFuncionarioPorEmail(servico, email) {
+    try {
+        const { EmployeeCollection } = servico.entities;
+        const linhas = linhasDaResposta(await servico.run(
+            SELECT.from(EmployeeCollection)
+                .columns(
+                    "EmployeeID",
+                    "BusinessPartnerID",
+                    "BusinessPartnerFormattedName",
+                    "FirstName",
+                    "LastName",
+                    "Email"
+                )
+                .where({ Email: email })
+        ));
+
+        // Sem $top/$orderby de proposito: o mesmo e-mail pode ter mais de um registro (recontratacao,
+        // dois vinculos) e a ordem que o C4C devolve nao e contratual - com $top=1 o requisitante
+        // trocaria de BusinessPartnerID entre um F5 e outro. O desempate acontece aqui, por EmployeeID,
+        // porque um $orderby recusado pelo C4C cairia no catch e viraria "nao achou" silencioso.
+        const funcionarios = linhas.filter(Boolean);
+        funcionarios.sort((a, b) =>
+            String(a.EmployeeID || "").localeCompare(String(b.EmployeeID || "")));
+
+        return funcionarios[0] || null;
+    } catch (erro) {
+        LOG.warn(
+            `Falha ao consultar EmployeeCollection para o e-mail ${email}; ` +
+            `tratando como requisitante nao encontrado: ${erro.message}`
+        );
+        return null;
+    }
+}
+
 module.exports = cds.service.impl(async function () {
     const employeeAndUserService = await cds.connect.to("employeeanduser");
     const contactService = await cds.connect.to("contact");
@@ -92,6 +134,15 @@ module.exports = cds.service.impl(async function () {
     // method/path, porque a unica entidade usada (AccountCollection) nao existe no c4codataapi.
     const accountService = await cds.connect.to("account");
     const interactionService = await cds.connect.to("servicerequestinteraction");
+
+    let promessaCalmItsm;
+    const conectarCalmItsm = () => {
+        promessaCalmItsm ??= cds.connect.to("SAP.Cloud.ALM.ITSM").catch((erro) => {
+            promessaCalmItsm = undefined;
+            throw erro;
+        });
+        return promessaCalmItsm;
+    };
 
     const {
         Employees,
@@ -385,6 +436,36 @@ module.exports = cds.service.impl(async function () {
 
         const contatoId = String(primeira.ContactID == null ? "" : primeira.ContactID).trim();
 
+        // Sem ContactID nao ha contato utilizavel (nem quando a consulta volta vazia, nem quando
+        // volta linha sem o ID): antes de desistir, tenta o MESMO e-mail na EmployeeCollection.
+        // Retorno antecipado porque o enriquecimento por AccountCollection abaixo so faz sentido
+        // para contas de contato - funcionario nao tem AccountID, entao clientes fica vazio e
+        // quem decide bloquear a tela continua sendo o frontend.
+        if (!contatoId) {
+            const funcionario = await buscarFuncionarioPorEmail(employeeAndUserService, email);
+            if (!funcionario) return { nome: "", contatoId: "", clientes: [], origem: "" };
+
+            const nomeFuncionario = [funcionario.FirstName, funcionario.LastName]
+                .map((parte) => String(parte || "").trim())
+                .filter(Boolean)
+                .join(" ") ||
+                String(funcionario.BusinessPartnerFormattedName || "").trim();
+
+            // BusinessPartnerID e o identificador que o C4C aceita em BuyerMainContactPartyID;
+            // o EmployeeID entra so como ultimo recurso, para nao devolver contatoId vazio
+            // (vazio = frontend trata como "nao achou").
+            const idFuncionario =
+                String(funcionario.BusinessPartnerID == null ? "" : funcionario.BusinessPartnerID).trim() ||
+                String(funcionario.EmployeeID == null ? "" : funcionario.EmployeeID).trim();
+
+            return {
+                nome: nomeFuncionario,
+                contatoId: idFuncionario,
+                clientes: [],
+                origem: "funcionario"
+            };
+        }
+
         // Passo 1 (ContactQueryByElements) ja traz uma linha por conta do contato: o dedupe
         // por AccountID monta a lista com o AccountFormattedName como descricao provisoria.
         const porCodigo = new Map();
@@ -454,7 +535,7 @@ module.exports = cds.service.impl(async function () {
 
         clientes.sort((a, b) => a.descricao.localeCompare(b.descricao, "pt-BR"));
 
-        return { nome, contatoId, clientes };
+        return { nome, contatoId, clientes, origem: "contato" };
     });
 
     // Le os bytes de UM anexo, so no clique de download. Nao valida se o anexo pertence a um
@@ -581,5 +662,45 @@ module.exports = cds.service.impl(async function () {
             .filter((interacao) => interacao.texto);
 
         return { interacoes };
+    });
+
+    this.on("ComponentesSap", async (req) => {
+        const busca = String(req.data.busca || "").trim();
+
+        const parametros = new URLSearchParams({
+            selectable: "true",
+            limit: String(LIMITE_COMPONENTES_SAP)
+        });
+
+        if (busca && /^(?=.*[a-zA-Z])[a-zA-Z*-]{1,40}$/.test(busca)) {
+            parametros.set("componentIdSearchText", busca);
+        }
+
+        let resposta;
+        try {
+            const calmItsmService = await conectarCalmItsm();
+            resposta = await calmItsmService.send({
+                method: "GET",
+                path: `/supportcases/masterdata/components?${parametros}`
+            });
+        } catch (erro) {
+            LOG.warn(`Falha ao ler componentes do SAP Cloud ALM: ${erro.message}`);
+            return req.reject(502,
+                `Nao foi possivel consultar os componentes do SAP Cloud ALM: ${erro.message}`);
+        }
+
+        const linhas = Array.isArray(resposta?.results) ? resposta.results : [];
+
+        return {
+            total: Number(resposta?.totalCount ?? linhas.length),
+            exibidos: linhas.length,
+            componentes: linhas.map((linha) => ({
+                id: String(linha.componentId ?? ""),
+                chave: String(linha.componentKey ?? ""),
+                descricao: String(linha.description ?? ""),
+                produto: String(linha.productDescription ?? ""),
+                obsoleto: Boolean(linha.obsolete)
+            }))
+        };
     });
 });

@@ -120,6 +120,16 @@
           "method": "get"
         },
         "csrfInBatch": true
+      },
+      "SAP.Cloud.ALM.ITSM": {
+        "kind": "rest",
+        "model": "srv/external/CALM_ITSM",
+        "[production]": {
+          "credentials": {
+            "destination": "CALM_ITSM",
+            "path": "/api/calm-itsmapi/v1"
+          }
+        }
       }
     }
   },

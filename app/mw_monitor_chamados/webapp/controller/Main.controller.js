@@ -129,10 +129,23 @@ sap.ui.define([
         TYPE_CODE_RESPOSTA_REQUISITANTE_C4C
     ];
 
+    // Fonte que identificou o usuario na function Requisitante: "contato" veio da
+    // ContactQueryByElements (traz as empresas vinculadas), "funcionario" veio do fallback pela
+    // EmployeeCollection com o mesmo e-mail (nao tem AccountID, logo nunca traz empresa) e ""
+    // significa que nenhuma das duas fontes achou o e-mail.
+    const ORIGEM_REQUISITANTE_FUNCIONARIO = "funcionario";
+
     // PROVISORIO (homologacao): e-mail assumido no lugar do usuario do shell quando o botao
     // "e-mail local" do ToolHeader esta ligado. Trocar o valor aqui para testar como outro
     // requisitante. Sai junto com o botao quando o app for para producao.
-    const EMAIL_LOCAL_DEV = "edislaine.silva@megawork.com";
+    const EMAIL_LOCAL_DEV = "bruno.bonatti@megawork.com";
+
+    const EMAIL_LOCAL_DEV_EDI = "edislaine.silva@megawork.com";
+
+    const EMAILS_DEV_POR_BOTAO = {
+        emailLocalButton: EMAIL_LOCAL_DEV,
+        emailEdiButton: EMAIL_LOCAL_DEV_EDI
+    };
 
     const NOVO_CHAMADO_DEFAULTS = {
         cliente: "",
@@ -327,21 +340,33 @@ sap.ui.define([
         // PROVISORIO (homologacao): alterna entre o usuario do shell e EMAIL_LOCAL_DEV. Recarrega
         // requisitante + lista + cockpit porque os tres filtram por _sRequisitanteContatoId - sem
         // isso a tela continuaria mostrando os chamados do requisitante anterior.
-        onAlternarEmailLocal(oEvent) {
-            const oBotao = oEvent.getSource();
-            const bLigado = oBotao.getPressed();
+        onAlternarEmailLocal() {
+            this._selecionarEmailDev(EMAIL_LOCAL_DEV);
+        },
 
-            this._bEmailLocal = bLigado;
+        onAlternarEmailEdi() {
+            this._selecionarEmailDev(EMAIL_LOCAL_DEV_EDI);
+        },
+
+        _selecionarEmailDev(sEmail) {
+            this._sEmailDev = sEmail;
+
+            const aBotoes = Object.keys(EMAILS_DEV_POR_BOTAO)
+                .map((sId) => ({ botao: this.byId(sId), email: EMAILS_DEV_POR_BOTAO[sId] }))
+                .filter((oItem) => oItem.botao);
+
+            for (const oItem of aBotoes) {
+                oItem.botao.setPressed(oItem.email === sEmail);
+                oItem.botao.setEnabled(false);
+            }
 
             // A lista inteira e recriada: o detalhe aberto esta preso a um indice ("/Tickets/3")
             // que passaria a apontar para outro chamado.
             this.byId("mainContents").to(this.createId("acompanharChamados"));
 
-            oBotao.setEnabled(false);
-
             // _carregarRequisitante trata o proprio erro (nunca rejeita), entao a cadeia segue e
-            // o botao sempre volta a ficar clicavel. Quando ele devolve false ja mostrou o popup
-            // de bloqueio - seguir daria a mesma busca sem filtro que a guarda do onInit evita.
+            // os botoes sempre voltam a ficar clicaveis. Quando ele devolve false ja mostrou o
+            // popup de bloqueio - seguir daria a mesma busca sem filtro que a guarda do onInit evita.
             this._carregarRequisitante()
                 .then((bRequisitanteOk) => {
                     if (!bRequisitanteOk) {
@@ -350,13 +375,14 @@ sap.ui.define([
 
                     return Promise.all([this._carregarTickets(), this._carregarCockpit()])
                         .then(() => {
-                            MessageToast.show(bLigado
-                                ? this._getResourceBundle().getText("emailLocalLigado", [EMAIL_LOCAL_DEV])
-                                : this._getResourceBundle().getText("emailLocalDesligado"));
+                            MessageToast.show(
+                                this._getResourceBundle().getText("emailLocalLigado", [sEmail]));
                         });
                 })
                 .finally(() => {
-                    oBotao.setEnabled(true);
+                    for (const oItem of aBotoes) {
+                        oItem.botao.setEnabled(true);
+                    }
                 });
         },
 
@@ -718,14 +744,29 @@ sap.ui.define([
                 oTable.setBusy(true);
             });
 
-            const aFiltros = [];
-            if (this._sRequisitanteContatoId) {
-                aFiltros.push(new Filter("BuyerMainContactPartyID", FilterOperator.EQ, this._sRequisitanteContatoId));
+            // Sem contatoId o binding sairia SEM filtro nenhum, trazendo os chamados de todo o
+            // tenant (vazamento entre clientes). _carregarRequisitante ja bloqueia esse caso, mas a
+            // guarda fica aqui tambem porque este metodo tem varios pontos de chamada (onInit,
+            // toggle de e-mail, refresh apos criar chamado) - o cockpit ja se protege do mesmo jeito.
+            if (!this._sRequisitanteContatoId) {
+                Log.warning("Carga de chamados ignorada: requisitante sem contatoId, o filtro por "
+                    + "BuyerMainContactPartyID nao pode ser montado", null,
+                    "megawork.mwmonitorchamados.controller.Main");
+
+                this._montarListasDeFiltro([]);
+                oTicketsModel.setProperty("/Tickets", []);
+                aTabelas.forEach((oTable) => oTable.setBusy(false));
+
+                return Promise.resolve(false);
             }
+
+            const aFiltros = [
+                new Filter("BuyerMainContactPartyID", FilterOperator.EQ, this._sRequisitanteContatoId)
+            ];
 
             const oBinding = oModel.bindList("/ServiceRequests", undefined,
                 [new Sorter("CreationDateTime", true)],
-                aFiltros.length ? aFiltros : undefined,
+                aFiltros,
                 { $select: SELECT_CHAMADO_LISTA });
 
             return oBinding.requestContexts(0, MAX_TICKETS_LISTA).then((aContexts) => {
@@ -1235,6 +1276,59 @@ sap.ui.define([
             const aInteracoesUnicas = aChatInteracoes.filter((m) =>
                 !oChavesNotas.has(this._chaveDedupe(m.autor, m.texto, m.quando)));
             return aChatNotas.concat(aInteracoesUnicas);
+        },
+
+        onAbrirComponentesSap() {
+            if (!this.getView().getModel("componentesSap")) {
+                this.getView().setModel(new JSONModel({
+                    carregando: false,
+                    busca: "",
+                    total: 0,
+                    exibidos: 0,
+                    componentes: []
+                }), "componentesSap");
+            }
+
+            this.byId("dialogComponentesSap").open();
+            this._carregarComponentesSap();
+        },
+
+        onFecharComponentesSap() {
+            this.byId("dialogComponentesSap").close();
+        },
+
+        onBuscarComponentesSap(oEvent) {
+            this.getView().getModel("componentesSap")
+                .setProperty("/busca", oEvent.getParameter("query") || "");
+            this._carregarComponentesSap();
+        },
+
+        _carregarComponentesSap() {
+            const oModelo = this.getView().getModel("componentesSap");
+            oModelo.setProperty("/carregando", true);
+
+            const oOperation = this.getOwnerComponent().getModel().bindContext("/ComponentesSap(...)");
+            oOperation.setParameter("busca", oModelo.getProperty("/busca") || "");
+
+            return oOperation.invoke()
+                .then(() => oOperation.getBoundContext().requestObject())
+                .then((oResultado) => {
+                    oModelo.setProperty("/componentes", oResultado?.componentes ?? []);
+                    oModelo.setProperty("/total", oResultado?.total ?? 0);
+                    oModelo.setProperty("/exibidos", oResultado?.exibidos ?? 0);
+                })
+                .catch((oError) => {
+                    Log.error("Falha ao carregar os componentes do SAP Cloud ALM", oError,
+                        "megawork.mwmonitorchamados.controller.Main");
+                    oModelo.setProperty("/componentes", []);
+                    oModelo.setProperty("/total", 0);
+                    oModelo.setProperty("/exibidos", 0);
+                    MessageBox.error(this._getResourceBundle().getText("criarChamadoComponentesSapErro"));
+                })
+                .finally(() => {
+                    oModelo.setProperty("/carregando", false);
+                    oOperation.destroy();
+                });
         },
 
         _lerInteracoesDoChamado(sObjectID) {
@@ -2645,7 +2739,7 @@ sap.ui.define([
         // roda fora do launchpad ou o servico falha - nunca rejeita.
         _lerUsuarioLogado() {
             // TESTE: usando email fixo temporariamente
-            return Promise.resolve(EMAIL_LOCAL_DEV);
+            return Promise.resolve(this._sEmailDev || EMAIL_LOCAL_DEV);
 
             // PROVISORIO: com o botao ligado o shell e ignorado e o app se apresenta ao backend
             // como EMAIL_LOCAL_DEV. Ver onAlternarEmailLocal.
@@ -2693,19 +2787,52 @@ sap.ui.define([
 
                 this._sRequisitanteNome = oRequisitante.nome ?? "";
                 this._sRequisitanteContatoId = oRequisitante.contatoId ?? "";
+                // Guardada no controller (mesmo padrao de _sRequisitanteNome/_sRequisitanteContatoId)
+                // porque e ela que diz se a ausencia de empresas e esperada ou e motivo de bloqueio.
+                this._sRequisitanteOrigem = oRequisitante.origem ?? "";
 
                 oCodelists.setProperty("/clientes", aClientes);
                 this._aplicarRequisitante();
 
-                // Sem contatoId ou sem nenhuma empresa vinculada, o resto do app (tickets filtrados
-                // por BuyerMainContactPartyID, wizard de criacao) nao tem como funcionar - bloqueia
-                // aqui em vez de deixar a tela seguir carregando vazia. O false devolvido e o que
-                // impede _carregarTickets de buscar TUDO sem filtro (o if do filtro so entra com
-                // contatoId).
-                if (!this._sRequisitanteContatoId || !aClientes.length) {
+                // origem vazia = nem contato nem funcionario responderam pelo e-mail; sem contatoId
+                // o filtro BuyerMainContactPartyID nao existe e a lista sairia com TODOS os chamados
+                // do tenant. Nos dois casos bloqueia aqui: o false devolvido e o que impede
+                // _carregarTickets/_carregarCockpit de rodarem.
+                if (!this._sRequisitanteOrigem || !this._sRequisitanteContatoId) {
                     MessageBox.error(this._getResourceBundle().getText("requisitanteSemEmpresa"));
                     return false;
                 }
+
+                // Funcionario interno (fallback pela EmployeeCollection): a collection nao tem
+                // AccountID, entao clientes vem SEMPRE vazio - exigir empresa aqui bloquearia um
+                // usuario que ja tem contatoId valido para filtrar chamados e responder no chat.
+                // Aviso via MessageToast por ser o componente menos intrusivo: e informativo, nao
+                // ha acao a tomar e o app continua utilizavel, entao um MessageBox exigindo clique
+                // atrapalharia a entrada na tela a cada carga.
+                if (this._sRequisitanteOrigem === ORIGEM_REQUISITANTE_FUNCIONARIO) {
+                    Log.warning("Requisitante identificado como funcionario interno pela EmployeeCollection: "
+                        + "sem empresas vinculadas, o seletor de empresa do wizard fica vazio e o chamado "
+                        + "criado sai sem BuyerPartyID", null,
+                        "megawork.mwmonitorchamados.controller.Main");
+
+                    MessageToast.show(this._getResourceBundle().getText("requisitanteFuncionarioInterno"));
+
+                    // Libera o busy da pagina "criarChamado": ele NAO pode depender de /clientes,
+                    // que neste caminho fica vazio para sempre - o wizard ficaria girando justamente
+                    // para o usuario que o fallback veio destravar.
+                    oCodelists.setProperty("/requisitanteCarregado", true);
+
+                    return true;
+                }
+
+                // Caminho do contato: sem nenhuma empresa vinculada o wizard de criacao nao tem o
+                // que oferecer no seletor de empresa - mantido bloqueado como antes.
+                if (!aClientes.length) {
+                    MessageBox.error(this._getResourceBundle().getText("requisitanteSemEmpresa"));
+                    return false;
+                }
+
+                oCodelists.setProperty("/requisitanteCarregado", true);
 
                 return true;
             }).catch((oError) => {

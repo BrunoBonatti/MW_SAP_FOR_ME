@@ -48,6 +48,7 @@
     }
   ],
   "clientes": [],
+  "requisitanteCarregado": false,
   "prioridadesChamado": [
     {
       "code": "IMEDIATA",
