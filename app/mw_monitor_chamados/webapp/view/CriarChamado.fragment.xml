@@ -21,6 +21,89 @@
         navigationChange=".onWizardNavigationChange"
         class="sapUiResponsivePadding--header sapUiResponsivePadding--content">
 
+        <dependents>
+            <Dialog
+                id="dialogComponentesSap"
+                title="{i18n>criarChamadoComponentesSapTitulo}"
+                contentWidth="42rem"
+                contentHeight="28rem"
+                resizable="true"
+                draggable="true"
+                busy="{componentesSap>/carregando}"
+                busyIndicatorDelay="0">
+                <subHeader>
+                    <OverflowToolbar>
+                        <SearchField
+                            placeholder="{i18n>criarChamadoComponentesSapBuscaPlaceholder}"
+                            value="{componentesSap>/busca}"
+                            search=".onBuscarComponentesSap"
+                            width="100%" />
+                    </OverflowToolbar>
+                </subHeader>
+                <content>
+                    <MessageStrip
+                        class="sapUiSmallMargin"
+                        type="Information"
+                        showIcon="true"
+                        visible="{= ${componentesSap>/total} &gt; ${componentesSap>/exibidos} }"
+                        text="{
+                            parts: [
+                                {path: 'componentesSap>/exibidos'},
+                                {path: 'componentesSap>/total'},
+                                {path: 'i18n>criarChamadoComponentesSapTruncado'}
+                            ],
+                            formatter: 'fmt.componentesSapTruncado'
+                        }" />
+                    <Table
+                        id="tabelaComponentesSap"
+                        items="{componentesSap>/componentes}"
+                        growing="true"
+                        growingThreshold="50"
+                        sticky="ColumnHeaders">
+                        <columns>
+                            <Column width="14rem">
+                                <Text text="{i18n>criarChamadoComponentesSapColId}" />
+                            </Column>
+                            <Column>
+                                <Text text="{i18n>criarChamadoComponentesSapColDescricao}" />
+                            </Column>
+                            <Column
+                                width="12rem"
+                                minScreenWidth="Tablet"
+                                demandPopin="true"
+                                popinDisplay="Inline">
+                                <Text text="{i18n>criarChamadoComponentesSapColProduto}" />
+                            </Column>
+                        </columns>
+                        <items>
+                            <ColumnListItem>
+                                <cells>
+                                    <ObjectIdentifier
+                                        title="{componentesSap>id}"
+                                        text="{componentesSap>chave}" />
+                                    <Text text="{componentesSap>descricao}" />
+                                    <Text text="{componentesSap>produto}" />
+                                </cells>
+                            </ColumnListItem>
+                        </items>
+                        <noData>
+                            <IllustratedMessage
+                                illustrationType="sapIllus-NoSearchResults"
+                                illustrationSize="Spot"
+                                enableDefaultTitleAndDescription="false"
+                                title="{i18n>criarChamadoComponentesSapVazioTitulo}"
+                                description="{i18n>criarChamadoComponentesSapVazioDescricao}" />
+                        </noData>
+                    </Table>
+                </content>
+                <beginButton>
+                    <Button
+                        text="{i18n>criarChamadoComponentesSapFechar}"
+                        press=".onFecharComponentesSap" />
+                </beginButton>
+            </Dialog>
+        </dependents>
+
         <!-- Tipo e prioridade nao tem campo. O tipo e travado no controller (SRRQ) e o resumo do
              passo 4 mostra um texto fixo; a prioridade e derivada de Impacto/Urgencia (ver
              MATRIZ_PRIORIDADE_CHAMADO/onImpactoUrgenciaChange no controller) e nunca aparece na
@@ -96,6 +179,16 @@
                         width="100%">
                         <core:Item key="{codelists>code}" text="{codelists>descricao}" />
                     </Select>
+
+                    <Label
+                        text="{i18n>criarChamadoComponenteSap}"
+                        labelFor="btnComponentesSap" />
+                    <Button
+                        id="btnComponentesSap"
+                        text="{i18n>criarChamadoComponentesSapBotao}"
+                        icon="sap-icon://search"
+                        press=".onAbrirComponentesSap"
+                        width="100%" />
 
                     <!-- Rotulo "Requisitante" sobre novoChamado>/contato: o nome da propriedade e
                          do dado gravado pelo controller, nao do texto de tela. -->

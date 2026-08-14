@@ -28,8 +28,19 @@
                     id="emailLocalButton"
                     icon="sap-icon://person-placeholder"
                     type="Transparent"
+                    pressed="true"
                     press=".onAlternarEmailLocal"
                     tooltip="{i18n>emailLocalTooltip}">
+                    <layoutData>
+                        <OverflowToolbarLayoutData priority="NeverOverflow" />
+                    </layoutData>
+                </ToggleButton>
+                <ToggleButton
+                    id="emailEdiButton"
+                    icon="sap-icon://employee"
+                    type="Transparent"
+                    press=".onAlternarEmailEdi"
+                    tooltip="{i18n>emailEdiTooltip}">
                     <layoutData>
                         <OverflowToolbarLayoutData priority="NeverOverflow" />
                     </layoutData>
@@ -253,7 +264,7 @@
                         showHeader="false"
                         enableScrolling="false"
                         floatingFooter="false"
-                        busy="{= !${codelists>/clientes} || !${codelists>/clientes}.length }"
+                        busy="{= !${codelists>/requisitanteCarregado} }"
                         busyIndicatorDelay="0"
                         class="sapUiResponsivePadding--footer">
                         <content>
