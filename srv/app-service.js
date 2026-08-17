@@ -35,6 +35,43 @@ const MIME_TYPE_PADRAO_ANEXO = "application/octet-stream";
 
 const LIMITE_COMPONENTES_SAP = 200;
 
+// Cliente unico do contrato; env var so como escape se a Megawork mudar de numero.
+const CUSTOMER_NUMBER_SAP = process.env.SAP_CUSTOMER_NUMBER || "0000832647";
+
+// Teto por pagina imposto pelo spec da ALM.
+const LIMITE_CONTATOS_SAP = 1000;
+
+// Trava contra giro infinito se totalCount vier maior que a lista realmente paginada.
+const MAXIMO_PAGINAS_CONTATOS_SAP = 20;
+
+const LIMITE_CLIENTES_SAP = 200;
+
+// Trava anti-loop contra offset ignorado, nao teto de capacidade: os tetos globais fecham antes.
+const MAXIMO_PAGINAS_CLIENTES_SAP = 20;
+
+// Cada cliente vira chamada a cases/ids e a tela espera todas.
+const MAXIMO_CLIENTES_SAP = 100;
+
+// Teto do spec de cases/ids: acima de 5 customerNumber por chamada a ALM recusa a consulta.
+const MAXIMO_CLIENTES_POR_LOTE_SAP = 5;
+
+const LIMITE_CHAMADOS_SAP = 500;
+
+const MAXIMO_PAGINAS_CHAMADOS_SAP = 20;
+
+// Teto de itens: so vale na fase de profundidade, senao cortaria cliente que nem foi lido.
+const MAXIMO_TOTAL_CHAMADOS_SAP = 10000;
+
+const MAXIMO_CHAMADAS_CHAMADOS_SAP = 60;
+
+// Lotes em serie levavam ~6 min: a latencia da ALM por chamada e que domina, nao a CPU.
+const LOTES_SIMULTANEOS_CHAMADOS_SAP = Number(process.env.SAP_LOTES_SIMULTANEOS || 6);
+
+// Reabrir a tela nao pode repagar a varredura inteira; curto para nao esconder chamado novo.
+const TTL_CACHE_CHAMADOS_SAP_MS = 5 * 60 * 1000;
+
+const cacheChamadosSap = new Map();
+
 function escaparHtml(texto) {
     return String(texto)
         .replace(/&/g, "&amp;")
@@ -96,23 +133,17 @@ async function buscarFuncionarioPorEmail(servico, email) {
         const linhas = linhasDaResposta(await servico.run(
             SELECT.from(EmployeeCollection)
                 .columns(
-                    "EmployeeID",
                     "BusinessPartnerID",
-                    "BusinessPartnerFormattedName",
-                    "FirstName",
-                    "LastName",
-                    "Email"
+                    "BusinessPartnerFormattedName"
                 )
                 .where({ Email: email })
         ));
 
-        // Sem $top/$orderby de proposito: o mesmo e-mail pode ter mais de um registro (recontratacao,
-        // dois vinculos) e a ordem que o C4C devolve nao e contratual - com $top=1 o requisitante
-        // trocaria de BusinessPartnerID entre um F5 e outro. O desempate acontece aqui, por EmployeeID,
-        // porque um $orderby recusado pelo C4C cairia no catch e viraria "nao achou" silencioso.
+        // O mesmo e-mail pode ter mais de um registro e a ordem do C4C nao e contratual: desempate
+        // local por BusinessPartnerID, porque um $orderby recusado viraria "nao achou" no catch.
         const funcionarios = linhas.filter(Boolean);
         funcionarios.sort((a, b) =>
-            String(a.EmployeeID || "").localeCompare(String(b.EmployeeID || "")));
+            String(a.BusinessPartnerID || "").localeCompare(String(b.BusinessPartnerID || "")));
 
         return funcionarios[0] || null;
     } catch (erro) {
@@ -122,6 +153,69 @@ async function buscarFuncionarioPorEmail(servico, email) {
         );
         return null;
     }
+}
+
+// Devolve lidos/total junto com o contato porque varredura truncada e cadastro inexistente dao
+// o mesmo 404 na tela e so o log separa os dois. Nao trata erro: quem chama traduz para 502.
+async function varrerContatosSap(calmItsmService, email, customerNumber) {
+    let pessoa = null;
+    let lidos = 0;
+    let total = 0;
+    let primeiroDaPaginaAnterior = "";
+
+    for (let pagina = 0; pagina < MAXIMO_PAGINAS_CONTATOS_SAP; pagina += 1) {
+        const parametros = new URLSearchParams({
+            customerNumber,
+            email,
+            // Sem ALL o default e ADMIN e quem nao tem "Edit Authorizations" some da lista.
+            authorizationObjects: "ALL",
+            offset: String(lidos),
+            limit: String(LIMITE_CONTATOS_SAP)
+        });
+
+        const resposta = await calmItsmService.send({
+            method: "GET",
+            path: `/supportcases/masterdata/contacts?${parametros}`
+        });
+
+        const linhas = Array.isArray(resposta?.results) ? resposta.results : [];
+        total = Number(resposta?.totalCount ?? linhas.length);
+        lidos += linhas.length;
+
+        // "email" nao existe no spec: a API pode ignorar o filtro e devolver a lista inteira.
+        const candidatos = linhas.filter((linha) =>
+            String(linha.email || "").trim().toLowerCase() === email);
+        pessoa = candidatos[0] ?? null;
+
+        if (candidatos.length > 1) {
+            LOG.warn(`${candidatos.length} S-Users com o e-mail ${email} no customer `
+                + `${customerNumber}; usando ${candidatos[0].suser} (ordem nao contratual).`);
+        }
+
+        // API que ignorasse o offset devolveria a mesma pagina ate estourar o rate limit.
+        const primeiro = String(linhas[0]?.suser ?? "");
+        const paginaRepetida = Boolean(primeiro) && primeiro === primeiroDaPaginaAnterior;
+        primeiroDaPaginaAnterior = primeiro;
+
+        // Parar antes de cobrir totalCount viraria 404 falso com a pessoa na pagina seguinte.
+        if (pessoa || !linhas.length || paginaRepetida || lidos >= total) break;
+    }
+
+    return { pessoa, lidos, total };
+}
+
+function contatoSapComoResposta(pessoa) {
+    return {
+        sUser: String(pessoa.suser ?? ""),
+        nome: [pessoa.firstname, pessoa.surname]
+            .map((parte) => String(parte || "").trim())
+            .filter(Boolean)
+            .join(" "),
+        primeiroNome: String(pessoa.firstname ?? "").trim(),
+        email: String(pessoa.email ?? ""),
+        // || e nao ??: os campos vazios da ALM chegam como "" e passariam pelo ??.
+        telefone: String(pessoa.phone || pessoa.phone2 || "")
+    };
 }
 
 module.exports = cds.service.impl(async function () {
@@ -445,22 +539,12 @@ module.exports = cds.service.impl(async function () {
             const funcionario = await buscarFuncionarioPorEmail(employeeAndUserService, email);
             if (!funcionario) return { nome: "", contatoId: "", clientes: [], origem: "" };
 
-            const nomeFuncionario = [funcionario.FirstName, funcionario.LastName]
-                .map((parte) => String(parte || "").trim())
-                .filter(Boolean)
-                .join(" ") ||
-                String(funcionario.BusinessPartnerFormattedName || "").trim();
-
             // BusinessPartnerID e o identificador que o C4C aceita em BuyerMainContactPartyID;
-            // o EmployeeID entra so como ultimo recurso, para nao devolver contatoId vazio
-            // (vazio = frontend trata como "nao achou").
-            const idFuncionario =
-                String(funcionario.BusinessPartnerID == null ? "" : funcionario.BusinessPartnerID).trim() ||
-                String(funcionario.EmployeeID == null ? "" : funcionario.EmployeeID).trim();
-
+            // vazio aqui = o frontend trata como "nao achou" e bloqueia a tela.
             return {
-                nome: nomeFuncionario,
-                contatoId: idFuncionario,
+                nome: String(funcionario.BusinessPartnerFormattedName || "").trim(),
+                contatoId: String(funcionario.BusinessPartnerID == null
+                    ? "" : funcionario.BusinessPartnerID).trim(),
                 clientes: [],
                 origem: "funcionario"
             };
@@ -702,5 +786,408 @@ module.exports = cds.service.impl(async function () {
                 obsoleto: Boolean(linha.obsolete)
             }))
         };
+    });
+
+    this.on("AmbientesSap", async (req) => {
+        const customerNumber = String(req.data.customerNumber || "").trim() || CUSTOMER_NUMBER_SAP;
+
+        // select=landscapeObjects descarta o bloco globalSUsers, que nao vai para a tela.
+        const parametros = new URLSearchParams({ customerNumber, select: "landscapeObjects" });
+
+        let resposta;
+        try {
+            const calmItsmService = await conectarCalmItsm();
+            resposta = await calmItsmService.send({
+                method: "GET",
+                path: `/supportcases/masterdata/landscapeObjectsExtended?${parametros}`
+            });
+        } catch (erro) {
+            LOG.warn(`Falha ao ler ambientes do SAP Cloud ALM: ${erro.message}`);
+            return req.reject(502,
+                `Nao foi possivel consultar os ambientes do SAP Cloud ALM: ${erro.message}`);
+        }
+
+        // Sem results na raiz como o resto da ALM: cada bloco traz o seu (ver spec do endpoint).
+        const linhas = Array.isArray(resposta?.landscapeObjects?.results)
+            ? resposta.landscapeObjects.results
+            : [];
+
+        // Dedupe: o sistema se repete por produto instalado e sairia identico na lista de ajuda.
+        const ambientes = [];
+        const vistos = new Set();
+
+        for (const linha of linhas) {
+            const ambiente = {
+                installationNbr: String(linha.installationNbr ?? ""),
+                systemNbr: String(linha.systemNbr ?? ""),
+                systemName: String(linha.systemName ?? ""),
+                systemType: String(linha.systemType ?? ""),
+                systemId: String(linha.systemId ?? "")
+            };
+            const chave = `${ambiente.installationNbr}|${ambiente.systemNbr}|${ambiente.systemId}`;
+
+            if (vistos.has(chave)) continue;
+
+            vistos.add(chave);
+            ambientes.push(ambiente);
+        }
+
+        if (!ambientes.length) {
+            LOG.warn(`SAP Cloud ALM nao devolveu ambientes para o customer ${customerNumber}.`);
+        }
+
+        return {
+            total: Number(resposta?.landscapeObjects?.totalCount ?? linhas.length),
+            exibidos: ambientes.length,
+            ambientes
+        };
+    });
+
+    this.on("ContatoSap", async (req) => {
+        const email = String(req.data.email || "").trim().toLowerCase();
+
+        if (!email) {
+            return req.reject(400, "Informe o e-mail para localizar o S-User no SAP Cloud ALM.");
+        }
+
+        let varredura;
+        try {
+            varredura = await varrerContatosSap(await conectarCalmItsm(), email, CUSTOMER_NUMBER_SAP);
+        } catch (erro) {
+            LOG.warn(`Falha ao ler contatos do SAP Cloud ALM: ${erro.message}`);
+            return req.reject(502,
+                `Nao foi possivel consultar os contatos do SAP Cloud ALM: ${erro.message}`);
+        }
+
+        if (!varredura.pessoa) {
+            // Varredura truncada e cadastro inexistente dao o mesmo 404 na tela.
+            if (varredura.lidos < varredura.total) {
+                LOG.warn(`Contatos lidos parcialmente (${varredura.lidos}/${varredura.total}) `
+                    + `ao procurar ${email}.`);
+            }
+
+            return req.reject(404, `Nenhum S-User encontrado para o e-mail ${email}.`);
+        }
+
+        return contatoSapComoResposta(varredura.pessoa);
+    });
+
+    // S-User do requisitante DO CHAMADO, nao do usuario logado: o detalhe so tem o nome dele
+    // (BuyerMainContactPartyName), entao o e-mail sai de uma consulta a ContactCollection antes
+    // de a ALM ser chamada. Os dois passos ficam no servidor para a tela nao pagar 2 roundtrips.
+    this.on("ContatoSapPorNome", async (req) => {
+        const nome = String(req.data.nome || "").trim();
+
+        if (!nome) {
+            return req.reject(400,
+                "Informe o nome do requisitante para localizar o S-User no SAP Cloud ALM.");
+        }
+
+        let contatos;
+        try {
+            const { ContactCollection } = contactService.entities;
+            contatos = linhasDaResposta(await contactService.run(
+                SELECT.from(ContactCollection)
+                    .columns("ContactID", "Name", "Email")
+                    .where({ Name: nome })
+            ));
+        } catch (erro) {
+            LOG.warn(`Falha ao consultar a ContactCollection pelo nome ${nome}: ${erro.message}`);
+            return req.reject(502,
+                `Nao foi possivel consultar o contato ${nome} no C4C: ${erro.message}`);
+        }
+
+        // Homonimo e cadastro duplicado existem no C4C: desempate local por ContactID, porque um
+        // $orderby recusado derrubaria a consulta inteira.
+        const comEmail = contatos
+            .filter((linha) => linha && String(linha.Email || "").trim())
+            .sort((a, b) => String(a.ContactID || "").localeCompare(String(b.ContactID || "")));
+
+        const emailsDistintos = new Set(comEmail.map((linha) =>
+            String(linha.Email).trim().toLowerCase()));
+
+        if (emailsDistintos.size > 1) {
+            LOG.warn(`${emailsDistintos.size} e-mails distintos para o nome ${nome} no C4C; `
+                + `usando o do contato ${comEmail[0].ContactID}.`);
+        }
+
+        const email = String(comEmail[0]?.Email ?? "").trim().toLowerCase();
+
+        if (!email) {
+            // Sem e-mail nao ha como consultar a ALM; 404 e nao 502 porque isso e cadastro.
+            LOG.warn(`Requisitante ${nome} sem e-mail utilizavel no C4C `
+                + `(${contatos.length} contatos com esse nome).`);
+
+            return req.reject(404, `Nenhum e-mail encontrado no C4C para o requisitante ${nome}.`);
+        }
+
+        let varredura;
+        try {
+            varredura = await varrerContatosSap(await conectarCalmItsm(), email, CUSTOMER_NUMBER_SAP);
+        } catch (erro) {
+            LOG.warn(`Falha ao ler contatos do SAP Cloud ALM para ${nome} (${email}): ${erro.message}`);
+            return req.reject(502,
+                `Nao foi possivel consultar os contatos do SAP Cloud ALM: ${erro.message}`);
+        }
+
+        if (!varredura.pessoa) {
+            if (varredura.lidos < varredura.total) {
+                LOG.warn(`Contatos lidos parcialmente (${varredura.lidos}/${varredura.total}) `
+                    + `ao procurar ${email} no customer ${CUSTOMER_NUMBER_SAP}.`);
+            }
+
+            return req.reject(404, `Nenhum S-User encontrado para o requisitante ${nome} `
+                + `(${email}) no customer ${CUSTOMER_NUMBER_SAP}.`);
+        }
+
+        return contatoSapComoResposta(varredura.pessoa);
+    });
+
+    this.on("ChamadosSap", async (req) => {
+        const sUser = String(req.data.sUser || "").trim();
+
+        if (!sUser) {
+            return req.reject(400, "Informe o S-User para consultar os chamados do SAP Cloud ALM.");
+        }
+
+        for (const [chave, entrada] of cacheChamadosSap) {
+            if (Date.now() - entrada.quando >= TTL_CACHE_CHAMADOS_SAP_MS) cacheChamadosSap.delete(chave);
+        }
+
+        const emCache = cacheChamadosSap.get(sUser);
+
+        if (!req.data.atualizar && emCache) {
+            LOG.info(`Chamados SAP do S-User ${sUser} servidos do cache `
+                + `(${emCache.dados.exibidos} chamados, ${Date.now() - emCache.quando} ms de idade).`);
+
+            // Copia: o consumidor mexer no array devolvido corromperia a entrada cacheada.
+            return { ...emCache.dados, chamados: emCache.dados.chamados.slice() };
+        }
+
+        const inicioTudo = Date.now();
+
+        let calmItsmService;
+        const clientes = [];
+        const clientesVistos = new Set();
+
+        try {
+            calmItsmService = await conectarCalmItsm();
+
+            let clientesLidos = 0;
+            let totalClientes = 0;
+            let primeiroClienteAnterior = "";
+
+            for (let pagina = 0; pagina < MAXIMO_PAGINAS_CLIENTES_SAP; pagina += 1) {
+                const parametros = new URLSearchParams({
+                    reporter: sUser,
+                    offset: String(clientesLidos),
+                    limit: String(LIMITE_CLIENTES_SAP)
+                });
+
+                const resposta = await calmItsmService.send({
+                    method: "GET",
+                    path: `/supportcases/masterdata/customers?${parametros}`
+                });
+
+                const linhas = Array.isArray(resposta?.results) ? resposta.results : [];
+                totalClientes = Number(resposta?.totalCount ?? linhas.length);
+                clientesLidos += linhas.length;
+
+                for (const linha of linhas) {
+                    const cliente = String(linha?.customerNumber ?? "").trim();
+                    // Um cliente por relationshipType: sem dedupe o mesmo lote iria duas vezes.
+                    if (!cliente || clientesVistos.has(cliente)) continue;
+                    clientesVistos.add(cliente);
+                    clientes.push(cliente);
+                }
+
+                // Offset ignorado repetiria a pagina ate estourar o rate limit.
+                const primeiro = String(linhas[0]?.customerNumber ?? "");
+                const paginaRepetida = Boolean(primeiro) && primeiro === primeiroClienteAnterior;
+                primeiroClienteAnterior = primeiro;
+
+                if (!linhas.length || paginaRepetida || clientesLidos >= totalClientes
+                    || clientes.length >= MAXIMO_CLIENTES_SAP) break;
+            }
+        } catch (erro) {
+            LOG.warn(`Falha ao ler os clientes do S-User ${sUser} no SAP Cloud ALM: ${erro.message}`);
+            return req.reject(502,
+                `Nao foi possivel consultar os clientes do SAP Cloud ALM: ${erro.message}`);
+        }
+
+        if (!clientes.length) {
+            // Sem escopo, cases/ids vazaria case alheio: melhor lista vazia que consulta aberta.
+            LOG.warn(`Nenhum cliente vinculado ao S-User ${sUser} em masterdata/customers; `
+                + "a lista de chamados SAP volta vazia.");
+            return { total: 0, exibidos: 0, chamados: [] };
+        }
+
+        if (clientes.length > MAXIMO_CLIENTES_SAP) {
+            LOG.warn(`S-User ${sUser} tem mais de ${MAXIMO_CLIENTES_SAP} clientes; `
+                + "a lista de chamados SAP cobre so os primeiros.");
+            clientes.length = MAXIMO_CLIENTES_SAP;
+        }
+
+        const msClientes = Date.now() - inicioTudo;
+
+        const lotes = [];
+        for (let inicio = 0; inicio < clientes.length; inicio += MAXIMO_CLIENTES_POR_LOTE_SAP) {
+            lotes.push(clientes.slice(inicio, inicio + MAXIMO_CLIENTES_POR_LOTE_SAP));
+        }
+
+        const chamados = [];
+        const correlacoesVistas = new Set();
+        let total = 0;
+        let lotesComFalha = 0;
+        let chamadasFeitas = 0;
+        let ultimoErro = "";
+
+        const estados = lotes.map((lote) => ({
+            lote,
+            // Chutar um cliente do lote faria o detalhe pedir o case ao cliente errado.
+            clienteDoLote: lote.length === 1 ? lote[0] : "",
+            chamadosLidos: 0,
+            totalDoLote: 0,
+            primeiraCorrelacaoAnterior: "",
+            paginas: 0,
+            concluido: false,
+            falhou: false
+        }));
+
+        const lerPagina = async (estado) => {
+            const parametros = new URLSearchParams({
+                reporter: sUser,
+                offset: String(estado.chamadosLidos),
+                limit: String(LIMITE_CHAMADOS_SAP)
+            });
+
+            // join(",") viraria um numero de cliente inexistente e nao filtraria nada.
+            for (const cliente of estado.lote) parametros.append("customerNumber", cliente);
+
+            chamadasFeitas += 1;
+
+            let resposta;
+            try {
+                resposta = await calmItsmService.send({
+                    method: "GET",
+                    path: `/supportcases/cases/ids?${parametros}`
+                });
+            } catch (erro) {
+                estado.falhou = true;
+                lotesComFalha += 1;
+                ultimoErro = erro.message;
+                // Um lote quebrado nao pode zerar a tela: os outros clientes continuam valendo.
+                LOG.warn(`Falha ao ler chamados do SAP Cloud ALM dos clientes ${estado.lote.join(", ")} `
+                    + `(S-User ${sUser}): ${erro.message}`);
+
+                // 429: paralelismo alto demais, e o lote perdido sai da lista sem erro na tela.
+                if (Number(erro?.status ?? erro?.statusCode ?? 0) === 429) {
+                    LOG.warn(`Rate limit da ALM atingido com ${LOTES_SIMULTANEOS_CHAMADOS_SAP} lotes `
+                        + "simultaneos; reduza SAP_LOTES_SIMULTANEOS.");
+                }
+
+                return;
+            }
+
+            const linhas = Array.isArray(resposta?.results) ? resposta.results : [];
+
+            // totalCount se repete em toda pagina do lote: somar uma vez, na primeira.
+            if (!estado.paginas) total += Number(resposta?.totalCount ?? linhas.length);
+
+            estado.paginas += 1;
+            estado.totalDoLote = Number(resposta?.totalCount ?? linhas.length);
+            estado.chamadosLidos += linhas.length;
+
+            for (const linha of linhas) {
+                const correlationId = String(linha?.correlationId ?? "").trim();
+                // O mesmo case volta em mais de um cliente quando ha hierarquia VAR.
+                if (!correlationId || correlacoesVistas.has(correlationId)) continue;
+                correlacoesVistas.add(correlationId);
+                chamados.push({ correlationId, customerNumber: estado.clienteDoLote });
+            }
+
+            const primeira = String(linhas[0]?.correlationId ?? "");
+            // Offset ignorado repetiria a pagina ate estourar o rate limit.
+            const paginaRepetida = Boolean(primeira) && primeira === estado.primeiraCorrelacaoAnterior;
+            estado.primeiraCorrelacaoAnterior = primeira;
+
+            if (!linhas.length || paginaRepetida || estado.chamadosLidos >= estado.totalDoLote
+                || estado.paginas >= MAXIMO_PAGINAS_CHAMADOS_SAP) {
+                estado.concluido = true;
+            }
+        };
+
+        const emParalelo = (quantos, trabalhador) =>
+            Promise.all(Array.from({ length: Math.max(1, Math.min(LOTES_SIMULTANEOS_CHAMADOS_SAP, quantos)) },
+                trabalhador));
+
+        // Fase A: pagina 1 de TODO lote, sem teto, senao cliente inteiro sai da tela em silencio.
+        let proximoLote = 0;
+        await emParalelo(estados.length, async () => {
+            while (proximoLote < estados.length) {
+                const indice = proximoLote;
+                proximoLote += 1;
+
+                await lerPagina(estados[indice]);
+            }
+        });
+
+        // Fase B: profundidade dos lotes que sobraram, dividida entre eles e limitada pelos tetos.
+        const fila = estados.filter((estado) => !estado.concluido && !estado.falhou);
+        let proximaUnidade = 0;
+        let tetoAtingido = false;
+
+        await emParalelo(fila.length, async () => {
+            while (proximaUnidade < fila.length) {
+                if (chamados.length >= MAXIMO_TOTAL_CHAMADOS_SAP
+                    || chamadasFeitas >= MAXIMO_CHAMADAS_CHAMADOS_SAP) {
+                    tetoAtingido = true;
+                    return;
+                }
+
+                const indice = proximaUnidade;
+                proximaUnidade += 1;
+                const estado = fila[indice];
+
+                await lerPagina(estado);
+
+                // Volta ao fim da fila: a profundidade e dividida entre todos, nao gasta num so.
+                if (!estado.concluido && !estado.falhou) fila.push(estado);
+            }
+        });
+
+        const lotesTruncados = estados.filter((estado) =>
+            !estado.falhou && !estado.concluido).length;
+
+        if (tetoAtingido) {
+            LOG.warn(`Leitura de chamados SAP truncada por teto (S-User ${sUser}): `
+                + `${lotesTruncados} lotes com historico nao lido por inteiro.`);
+        }
+
+        for (const estado of estados) {
+            // Truncado por teto: sem o aviso o parcial passa por lista completa no suporte.
+            if (estado.falhou || estado.concluido) continue;
+            LOG.warn(`Chamados lidos parcialmente (${estado.chamadosLidos}/${estado.totalDoLote}) nos `
+                + `clientes ${estado.lote.join(", ")} (S-User ${sUser}).`);
+        }
+
+        // Lista vazia com lote quebrado viraria "nenhum chamado" na tela, sem sinal de falha.
+        if (lotesComFalha && !chamados.length) {
+            return req.reject(502,
+                `Nao foi possivel consultar os chamados do SAP Cloud ALM: ${ultimoErro}`);
+        }
+
+        const dados = { total, exibidos: chamados.length, chamados };
+
+        cacheChamadosSap.set(sUser, { quando: Date.now(), dados });
+
+        // Diagnostico de lentidao: e a latencia por chamada da ALM que manda no tempo total.
+        LOG.info(`Chamados SAP do S-User ${sUser}: ${clientes.length} clientes em ${msClientes} ms, `
+            + `${lotes.length} lotes / ${chamadasFeitas} chamadas a cases/ids em `
+            + `${Date.now() - inicioTudo - msClientes} ms (${LOTES_SIMULTANEOS_CHAMADOS_SAP} simultaneos), `
+            + `${chamados.length} chamados, ${lotesComFalha} lotes com falha, `
+            + `${lotesTruncados} truncados. Total ${Date.now() - inicioTudo} ms.`);
+
+        return dados;
     });
 });
