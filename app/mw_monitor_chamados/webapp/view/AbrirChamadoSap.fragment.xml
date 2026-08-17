@@ -17,6 +17,77 @@
         draggable="true"
         busy="{chamadoSap>/enviando}"
         busyIndicatorDelay="0">
+        <dependents>
+            <Dialog
+                id="dialogAmbientesSap"
+                title="{i18n>abrirChamadoSapAmbientesTitulo}"
+                contentWidth="42rem"
+                contentHeight="28rem"
+                resizable="true"
+                draggable="true"
+                busy="{ambientesSap>/carregando}"
+                busyIndicatorDelay="0">
+                <subHeader>
+                    <OverflowToolbar>
+                        <SearchField
+                            placeholder="{i18n>abrirChamadoSapAmbientesBuscaPlaceholder}"
+                            value="{ambientesSap>/busca}"
+                            search=".onBuscarAmbientesSap"
+                            width="100%" />
+                    </OverflowToolbar>
+                </subHeader>
+                <content>
+                    <!-- installationNbr/systemNbr ficam fora da lista: quem reconhece o ambiente na
+                         tela e o nome/tipo/SID, os numeros so identificam o sistema no chamado. -->
+                    <Table
+                        id="tabelaAmbientesSap"
+                        items="{ambientesSap>/ambientes}"
+                        growing="true"
+                        growingThreshold="50"
+                        sticky="ColumnHeaders">
+                        <columns>
+                            <Column>
+                                <Text text="{i18n>abrirChamadoSapAmbientesColSistema}" />
+                            </Column>
+                            <Column
+                                width="12rem"
+                                minScreenWidth="Tablet"
+                                demandPopin="true"
+                                popinDisplay="Inline">
+                                <Text text="{i18n>abrirChamadoSapAmbientesColTipo}" />
+                            </Column>
+                            <Column width="12rem">
+                                <Text text="{i18n>abrirChamadoSapAmbientesColId}" />
+                            </Column>
+                        </columns>
+                        <items>
+                            <ColumnListItem
+                                type="Active"
+                                press=".onSelecionarAmbienteSap">
+                                <cells>
+                                    <Text text="{ambientesSap>systemName}" />
+                                    <Text text="{ambientesSap>systemType}" />
+                                    <Text text="{ambientesSap>systemId}" />
+                                </cells>
+                            </ColumnListItem>
+                        </items>
+                        <noData>
+                            <IllustratedMessage
+                                illustrationType="sapIllus-NoSearchResults"
+                                illustrationSize="Spot"
+                                enableDefaultTitleAndDescription="false"
+                                title="{i18n>abrirChamadoSapAmbientesVazioTitulo}"
+                                description="{i18n>abrirChamadoSapAmbientesVazioDescricao}" />
+                        </noData>
+                    </Table>
+                </content>
+                <beginButton>
+                    <Button
+                        text="{i18n>abrirChamadoSapAmbientesFechar}"
+                        press=".onFecharAmbientesSap" />
+                </beginButton>
+            </Dialog>
+        </dependents>
         <content>
             <MessageStrip
                 class="sapUiSmallMargin"
@@ -48,13 +119,32 @@
                 columnsL="1"
                 columnsM="1">
 
+                <!-- Somente leitura: valor ainda e fixo, editar nao mudaria o chamado no SAP. -->
+                <Label
+                    text="{i18n>abrirChamadoSapCliente}"
+                    labelFor="inputClienteChamadoSap" />
+                <Input
+                    id="inputClienteChamadoSap"
+                    value="{chamadoSap>/customerNome}"
+                    editable="false"
+                    width="100%" />
+
+                <Label
+                    text="{i18n>abrirChamadoSapCustomerNbr}"
+                    labelFor="inputCustomerNbrChamadoSap" />
+                <Input
+                    id="inputCustomerNbrChamadoSap"
+                    value="{chamadoSap>/customerNbr}"
+                    editable="false"
+                    width="12rem" />
+
                 <!-- Somente leitura: editar criaria divergencia com o cadastro do SAP Cloud ALM. -->
                 <Label
-                    text="{i18n>abrirChamadoSapSUser}"
-                    labelFor="inputSUserChamadoSap" />
+                    text="{i18n>abrirChamadoSapReporter}"
+                    labelFor="inputReporterChamadoSap" />
                 <HBox width="100%" alignItems="Center">
                     <Input
-                        id="inputSUserChamadoSap"
+                        id="inputReporterChamadoSap"
                         value="{chamadoSap>/sUser}"
                         placeholder="{i18n>abrirChamadoSapSUserVazio}"
                         editable="false"
@@ -70,7 +160,33 @@
                     <ObjectStatus
                         class="sapUiTinyMarginBegin"
                         text="{= ${chamadoSap>/sUserCarregando} ? ${i18n>abrirChamadoSapSUserCarregando} : (${chamadoSap>/sUserNome} || (${chamadoSap>/sUserFalha} ? ${i18n>abrirChamadoSapSUserErro} : ${i18n>abrirChamadoSapSUserNaoEncontrado})) }"
-                        state="{= ${chamadoSap>/sUserCarregando} ? 'Information' : (${chamadoSap>/sUserNome} ? 'Success' : (${chamadoSap>/sUserFalha} ? 'Error' : 'Warning')) }">
+                        state="None">
+                        <layoutData>
+                            <FlexItemData shrinkFactor="1" growFactor="1" />
+                        </layoutData>
+                    </ObjectStatus>
+                </HBox>
+
+                <Label
+                    text="{i18n>abrirChamadoSapSUserRequisitante}"
+                    labelFor="inputSUserRequisitanteChamadoSap" />
+                <HBox width="100%" alignItems="Center">
+                    <Input
+                        id="inputSUserRequisitanteChamadoSap"
+                        value="{chamadoSap>/sUserLogado}"
+                        placeholder="{i18n>abrirChamadoSapSUserVazio}"
+                        editable="false"
+                        busy="{chamadoSap>/sUserLogadoCarregando}"
+                        busyIndicatorDelay="0"
+                        width="12rem">
+                        <layoutData>
+                            <FlexItemData shrinkFactor="0" growFactor="0" />
+                        </layoutData>
+                    </Input>
+                    <ObjectStatus
+                        class="sapUiTinyMarginBegin"
+                        text="{= ${chamadoSap>/sUserLogadoCarregando} ? ${i18n>abrirChamadoSapSUserCarregando} : (${chamadoSap>/sUserLogadoNome} || (${chamadoSap>/sUserLogadoFalha} ? ${i18n>abrirChamadoSapSUserErro} : ${i18n>abrirChamadoSapSUserLogadoNaoEncontrado})) }"
+                        state="None">
                         <layoutData>
                             <FlexItemData shrinkFactor="1" growFactor="1" />
                         </layoutData>
@@ -117,6 +233,38 @@
                         type="Transparent"
                         tooltip="{i18n>criarChamadoComponentesSapLimpar}"
                         press=".onLimparComponenteChamadoSap">
+                        <layoutData>
+                            <FlexItemData shrinkFactor="0" growFactor="0" />
+                        </layoutData>
+                    </Button>
+                </HBox>
+
+                <Label
+                    text="{i18n>abrirChamadoSapAmbiente}"
+                    labelFor="btnAmbientesSap" />
+                <HBox width="100%">
+                    <Button
+                        id="btnAmbientesSap"
+                        text="{
+                            parts: [
+                                {path: 'chamadoSap>/ambiente'},
+                                {path: 'i18n>abrirChamadoSapAmbientesBotao'}
+                            ],
+                            formatter: 'fmt.ambienteSapResumo'
+                        }"
+                        icon="sap-icon://search"
+                        press=".onAbrirAmbientesSap"
+                        width="100%">
+                        <layoutData>
+                            <FlexItemData shrinkFactor="0" growFactor="1" />
+                        </layoutData>
+                    </Button>
+                    <Button
+                        visible="{= !!${chamadoSap>/ambiente} }"
+                        icon="sap-icon://decline"
+                        type="Transparent"
+                        tooltip="{i18n>abrirChamadoSapAmbientesLimpar}"
+                        press=".onLimparAmbienteSap">
                         <layoutData>
                             <FlexItemData shrinkFactor="0" growFactor="0" />
                         </layoutData>

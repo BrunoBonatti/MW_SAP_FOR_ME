@@ -119,13 +119,48 @@ service IntegrationService {
     componentes : array of ComponenteSap;
   };
 
+  // installationNbr/systemNbr sao o dado util do chamado; o resto so orienta o usuario na ajuda de valor.
+  type AmbienteSap {
+    installationNbr : String;
+    systemNbr       : String;
+    systemName      : String;
+    systemType      : String;
+    systemId        : String;
+  }
+
+  function AmbientesSap(customerNumber : String) returns {
+    total     : Integer;
+    exibidos  : Integer;
+    ambientes : array of AmbienteSap;
+  };
+
   // CustomerSet da ALM nao tem nome completo nem telefone unico: concatenacao e escolha ficam no handler.
   type ContatoSUser {
-    sUser    : String;
-    nome     : String;
-    email    : String;
-    telefone : String;
+    sUser        : String;
+    nome         : String;
+    // Separado de nome: o Reporter da tela exibe so o primeiro nome ao lado do S-User.
+    primeiroNome : String;
+    email        : String;
+    telefone     : String;
   }
 
   function ContatoSap(email : String) returns ContatoSUser;
+
+  // Entra pelo NOME porque e so isso que o detalhe do chamado tem do requisitante
+  // (BuyerMainContactPartyName); o e-mail que a ALM exige o handler resolve no C4C.
+  // Sem customerNumber porque o S-User do requisitante e sempre buscado no customer da ALM.
+  function ContatoSapPorNome(nome : String) returns ContatoSUser;
+
+  // ALM devolve so correlationId; customerNumber vem do escopo e a leitura do detalhe exige os dois.
+  type ChamadoSapId {
+    correlationId  : String;
+    customerNumber : String;
+  }
+
+  // atualizar ignora o cache de 5 min do handler; e o que o botao de refresh da tela usa.
+  function ChamadosSap(sUser : String, atualizar : Boolean) returns {
+    total    : Integer;
+    exibidos : Integer;
+    chamados : array of ChamadoSapId;
+  };
 }

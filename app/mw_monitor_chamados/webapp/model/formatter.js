@@ -446,6 +446,16 @@ sap.ui.define([
                 : oComponente.id;
         },
 
+        /** Texto do ambiente SAP escolhido (systemId - systemName); sPadrao cobre botao e revisao. */
+        ambienteSapResumo: function (oAmbiente, sPadrao) {
+            if (!oAmbiente || !oAmbiente.systemId) {
+                return sPadrao || "";
+            }
+            return oAmbiente.systemName
+                ? oAmbiente.systemId + " - " + oAmbiente.systemName
+                : oAmbiente.systemId;
+        },
+
         /** Alias publico de oDataDeTexto, mantido como API documentada em docs/. */
         _parseData: function (sData) {
             return oDataDeTexto(sData);

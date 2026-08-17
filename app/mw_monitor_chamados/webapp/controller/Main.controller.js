@@ -169,6 +169,10 @@ sap.ui.define([
         componenteSap: null
     };
 
+    // PROVISORIO: aguardando integracao com a consulta de cliente.
+    const CUSTOMER_NBR_FIXO = "0002015672";
+    const CUSTOMER_NOME_FIXO = "ESGAS - COMPANHIA DE GAS DO ESPIRITO SANTO";
+
     const WIZARD_ID = "wizardCriarChamado";
     const PASSO_CLASSIFICACAO = 1;
     const PASSO_DETALHES = 2;
@@ -273,8 +277,8 @@ sap.ui.define([
                 new JSONModel(Object.assign({}, NOVO_CHAMADO_DEFAULTS,
                     { anexos: [], areasAfetadas: [], tiposImpacto: [] })), "novoChamado");
 
-            // Filtros e ordem POR TELA de acompanhamento: as duas listam tickets>/Tickets, mas cada
-            // uma tem seu proprio binding - filtrar/ordenar numa nao pode mexer na outra.
+            // Filtros e ordem POR TELA de acompanhamento: cada uma tem lista propria (/Tickets do
+            // C4C, /TicketsSap do Cloud ALM) - filtrar/ordenar numa nao pode mexer na outra.
             this._mEstadoAcompanhamento = {};
             SUFIXOS_ACOMPANHAMENTO.forEach((sSufixo) => {
                 this._mEstadoAcompanhamento[sSufixo] = {
@@ -295,6 +299,8 @@ sap.ui.define([
             Device.media.attachHandler(this._handleWindowResize, this);
 
             this.getOwnerComponent().getModel("tickets").setProperty("/Tickets", []);
+            // Lista do fluxo SAP (escopo por S-User): vazia pelo mesmo motivo de /Tickets.
+            this.getOwnerComponent().getModel("tickets").setProperty("/TicketsSap", []);
 
             this._montarListasDeFiltro([]);
 
@@ -315,6 +321,8 @@ sap.ui.define([
 
                 this._carregarTickets();
                 this._carregarCockpit();
+                // Espera o S-User por dentro: encadear aqui seguraria tickets e cockpit.
+                this._carregarChamadosSap();
             });
         },
 
@@ -392,7 +400,12 @@ sap.ui.define([
                         return null;
                     }
 
-                    return Promise.all([this._carregarTickets(), this._carregarCockpit()])
+                    return Promise.all([
+                        this._carregarTickets(),
+                        this._carregarCockpit(),
+                        // Novo usuario, novo S-User: sem isto a lista SAP fica a do anterior.
+                        this._carregarChamadosSap()
+                    ])
                         .then(() => {
                             MessageToast.show(
                                 this._getResourceBundle().getText("emailLocalLigado", [sEmail]));
@@ -449,12 +462,13 @@ sap.ui.define([
             const oFiltros = this._filtrosDaTela(sSufixo);
 
             if (sQuery) {
+                // A lista SAP so tem correlationId: filtrar por titulo/ID/tipo zeraria a tabela.
+                const aCampos = sSufixo === "Sap"
+                    ? ["correlationId"]
+                    : ["titulo", "ID", "tipo"];
+
                 oFiltros.search = new Filter({
-                    filters: [
-                        new Filter("titulo", FilterOperator.Contains, sQuery),
-                        new Filter("ID", FilterOperator.Contains, sQuery),
-                        new Filter("tipo", FilterOperator.Contains, sQuery)
-                    ],
+                    filters: aCampos.map((sCampo) => new Filter(sCampo, FilterOperator.Contains, sQuery)),
                     and: false
                 });
             } else {
@@ -542,8 +556,7 @@ sap.ui.define([
             this._recarregarChamados("Sap");
         },
 
-        // Limpa os filtros SO da tela que pediu o refresh; a releitura em si (_carregarTickets) e
-        // compartilhada, porque as duas telas mostram a mesma lista.
+        // Limpa os filtros SO da tela que pediu o refresh; cada tela tem a sua propria lista.
         _recarregarChamados(sSufixo) {
             this.byId("searchTickets" + sSufixo)?.setValue("");
             this.byId("selectStatus" + sSufixo)?.setSelectedKey("");
@@ -561,7 +574,10 @@ sap.ui.define([
             });
             this._applyTicketFilters(sSufixo);
 
-            this._carregarTickets().then((bOk) => {
+            // A tela SAP le /TicketsSap, e o true fura o cache do handler - refresh tem de reler.
+            const pCarga = sSufixo === "Sap" ? this._carregarChamadosSap(true) : this._carregarTickets();
+
+            pCarga.then((bOk) => {
                 if (bOk) {
                     MessageToast.show(this._getResourceBundle().getText("ticketsRefreshTooltip"));
                 }
@@ -752,11 +768,8 @@ sap.ui.define([
             const oComponent = this.getOwnerComponent();
             const oModel = oComponent.getModel();
             const oTicketsModel = oComponent.getModel("tickets");
-            // As duas telas de acompanhamento mostram a MESMA lista: o busy vai nas duas tabelas,
-            // senao a que nao pediu o refresh continuaria exibindo dados velhos sem indicacao.
-            const aTabelas = SUFIXOS_ACOMPANHAMENTO
-                .map((sSufixo) => this.byId("ticketsTable" + sSufixo))
-                .filter(Boolean);
+            // So a do C4C: a tabela SAP vem de /TicketsSap via _carregarChamadosSap.
+            const aTabelas = [this.byId("ticketsTable")].filter(Boolean);
 
             aTabelas.forEach((oTable) => {
                 oTable.setBusyIndicatorDelay(0);
@@ -808,6 +821,102 @@ sap.ui.define([
                 aTabelas.forEach((oTable) => oTable.setBusy(false));
                 oBinding.destroy();
             });
+        },
+
+        // Escopo por S-User, logo roda DEPOIS dele (tickets/cockpit usam contatoId e nao esperam).
+        _carregarChamadosSap(bAtualizar) {
+            const oTable = this.byId("ticketsTableSap");
+
+            // Fora do executor nao existe S-User: limpar, senao fica a lista do usuario anterior.
+            if (this._sRequisitanteOrigem !== ORIGEM_REQUISITANTE_FUNCIONARIO) {
+                this.getOwnerComponent().getModel("tickets").setProperty("/TicketsSap", []);
+
+                return Promise.resolve(false);
+            }
+
+            // Toggle de e-mail dev pode trocar o usuario enquanto esta carga viaja.
+            const iGeracao = this._iGeracaoRequisitante;
+
+            this._iCargasChamadosSapEmVoo = (this._iCargasChamadosSapEmVoo ?? 0) + 1;
+
+            oTable?.setBusyIndicatorDelay(0);
+            oTable?.setBusy(true);
+
+            return this._lerSUserRequisitante()
+                .then((oResultado) => {
+                    if (iGeracao !== this._iGeracaoRequisitante) {
+                        return false;
+                    }
+
+                    const sSUser = String(oResultado?.sUser ?? "").trim();
+
+                    // Sem S-User a busca sai sem escopo e vaza chamado de outro usuario.
+                    if (!sSUser) {
+                        Log.warning("Carga de chamados SAP ignorada: requisitante sem S-User", null,
+                            "megawork.mwmonitorchamados.controller.Main");
+
+                        this.getOwnerComponent().getModel("tickets").setProperty("/TicketsSap", []);
+
+                        return false;
+                    }
+
+                    return this._lerChamadosSap(sSUser, iGeracao, bAtualizar);
+                })
+                .finally(() => {
+                    this._iCargasChamadosSapEmVoo -= 1;
+
+                    // Solta o busy so quando nenhuma carga esta em voo: a obsoleta chega antes.
+                    if (!this._iCargasChamadosSapEmVoo) {
+                        oTable?.setBusy(false);
+                    }
+                });
+        },
+
+        // Falha nao abre MessageBox: a lista do C4C e o resto da tela seguem uteis.
+        _lerChamadosSap(sSUser, iGeracao, bAtualizar) {
+            let oOperation = null;
+
+            return Promise.resolve()
+                .then(() => {
+                    // $direct: no $batch $auto esta leitura cara (clientes + ids) segura a lista do C4C.
+                    oOperation = this.getOwnerComponent().getModel().bindContext("/ChamadosSap(...)",
+                        null, { $$groupId: "$direct" });
+                    oOperation.setParameter("sUser", sSUser);
+                    // So o refresh pede releitura: sem isso a tela repaga a varredura a cada entrada.
+                    oOperation.setParameter("atualizar", bAtualizar === true);
+
+                    return oOperation.invoke();
+                })
+                .then(() => oOperation.getBoundContext().requestObject())
+                .then((oResultado) => {
+                    // Resposta lenta do usuario anterior mostraria os chamados dele na tabela do novo.
+                    if (iGeracao !== this._iGeracaoRequisitante) {
+                        return false;
+                    }
+
+                    const aChamados = (oResultado?.chamados ?? []).map((oChamado) => ({
+                        correlationId: String(oChamado?.correlationId ?? ""),
+                        customerNumber: String(oChamado?.customerNumber ?? "")
+                    }));
+
+                    this.getOwnerComponent().getModel("tickets").setProperty("/TicketsSap", aChamados);
+
+                    return true;
+                })
+                .catch((oError) => {
+                    Log.error("Falha ao carregar os chamados do SAP Cloud ALM", oError,
+                        "megawork.mwmonitorchamados.controller.Main");
+
+                    if (iGeracao === this._iGeracaoRequisitante) {
+                        this.getOwnerComponent().getModel("tickets").setProperty("/TicketsSap", []);
+                        MessageToast.show(this._getResourceBundle().getText("ticketsSapErroCarregar"));
+                    }
+
+                    return false;
+                })
+                .finally(() => {
+                    oOperation?.destroy();
+                });
         },
 
         // O tenant rotula o SRRQ como "Service Request" e no idioma do usuario do C4C; o negocio
@@ -1374,6 +1483,100 @@ sap.ui.define([
                     oModelo.setProperty("/carregando", false);
                     oOperation.destroy();
                 });
+        },
+
+        onAbrirAmbientesSap() {
+            this._abrirAmbientesSap();
+        },
+
+        _abrirAmbientesSap() {
+            if (!this.getView().getModel("ambientesSap")) {
+                this.getView().setModel(new JSONModel({
+                    carregando: false,
+                    busca: "",
+                    total: 0,
+                    exibidos: 0,
+                    ambientes: []
+                }), "ambientesSap");
+            }
+
+            this.byId("dialogAmbientesSap").open();
+            this._carregarAmbientesSap();
+        },
+
+        onFecharAmbientesSap() {
+            this.byId("dialogAmbientesSap").close();
+        },
+
+        // Grava tambem installationNbr/systemNbr: nao aparecem na lista, mas sao o que o chamado usa.
+        onSelecionarAmbienteSap(oEvent) {
+            const oAmbiente = oEvent.getSource().getBindingContext("ambientesSap").getObject();
+
+            this._modeloChamadoSap().setProperty("/ambiente", {
+                installationNbr: oAmbiente.installationNbr,
+                systemNbr: oAmbiente.systemNbr,
+                systemName: oAmbiente.systemName,
+                systemType: oAmbiente.systemType,
+                systemId: oAmbiente.systemId
+            });
+
+            this.byId("dialogAmbientesSap").close();
+        },
+
+        onLimparAmbienteSap() {
+            this._modeloChamadoSap().setProperty("/ambiente", null);
+        },
+
+        // Filtro no cliente: a API de landscape nao tem parametro de busca, nao ha nova chamada.
+        onBuscarAmbientesSap(oEvent) {
+            this.getView().getModel("ambientesSap")
+                .setProperty("/busca", oEvent.getParameter("query") || "");
+            this._filtrarAmbientesSap();
+        },
+
+        _carregarAmbientesSap() {
+            const oModelo = this.getView().getModel("ambientesSap");
+            oModelo.setProperty("/carregando", true);
+
+            // Cliente do proprio dialogo: o dia que ele deixar de ser fixo, isto acompanha sozinho.
+            const oOperation = this.getOwnerComponent().getModel().bindContext("/AmbientesSap(...)");
+            oOperation.setParameter("customerNumber",
+                this._modeloChamadoSap().getProperty("/customerNbr") || CUSTOMER_NBR_FIXO);
+
+            return oOperation.invoke()
+                .then(() => oOperation.getBoundContext().requestObject())
+                .then((oResultado) => {
+                    this._aAmbientesSap = oResultado?.ambientes ?? [];
+                    this._filtrarAmbientesSap();
+                })
+                .catch((oError) => {
+                    Log.error("Falha ao carregar os ambientes do SAP Cloud ALM", oError,
+                        "megawork.mwmonitorchamados.controller.Main");
+                    this._aAmbientesSap = [];
+                    oModelo.setProperty("/ambientes", []);
+                    oModelo.setProperty("/total", 0);
+                    oModelo.setProperty("/exibidos", 0);
+                    MessageBox.error(this._getResourceBundle().getText("abrirChamadoSapAmbientesErro"));
+                })
+                .finally(() => {
+                    oModelo.setProperty("/carregando", false);
+                    oOperation.destroy();
+                });
+        },
+
+        _filtrarAmbientesSap() {
+            const oModelo = this.getView().getModel("ambientesSap");
+            const aTodos = this._aAmbientesSap || [];
+            const sBusca = (oModelo.getProperty("/busca") || "").trim().toLowerCase();
+
+            const aFiltrados = sBusca
+                ? aTodos.filter((oAmbiente) => [oAmbiente.systemName, oAmbiente.systemType, oAmbiente.systemId]
+                    .some((sCampo) => (sCampo || "").toLowerCase().includes(sBusca)))
+                : aTodos;
+
+            oModelo.setProperty("/ambientes", aFiltrados);
+            oModelo.setProperty("/total", aTodos.length);
+            oModelo.setProperty("/exibidos", aFiltrados.length);
         },
 
         _lerInteracoesDoChamado(sObjectID) {
@@ -2194,6 +2397,9 @@ sap.ui.define([
                 return;
             }
 
+            // Requisitante do CHAMADO, nao o usuario logado: e o S-User dele que vai no Reporter.
+            const sRequisitante = String(oContext.getProperty("buyerMainContactPartyName") ?? "").trim();
+
             this._modeloChamadoSap().setData({
                 origemId: String(oContext.getProperty("ID") ?? "").trim(),
                 origemTitulo: String(oContext.getProperty("titulo") ?? "").trim(),
@@ -2201,11 +2407,20 @@ sap.ui.define([
                 descricao: String(oContext.getProperty("descricao") ?? "").trim(),
                 prioridade: NOVO_CHAMADO_DEFAULTS.prioridade,
                 componenteSap: null,
+                ambiente: null,
+                customerNbr: CUSTOMER_NBR_FIXO,
+                customerNome: CUSTOMER_NOME_FIXO,
+                requisitante: sRequisitante,
                 sUser: "",
                 sUserNome: "",
                 // Nasce carregando para o campo nao piscar "nao encontrado" antes da consulta.
                 sUserCarregando: true,
                 sUserFalha: false,
+                // sUserLogado*: S-User do usuario logado, diferente de sUser* (contato do chamado).
+                sUserLogado: "",
+                sUserLogadoNome: "",
+                sUserLogadoCarregando: true,
+                sUserLogadoFalha: false,
                 enviando: false
             });
 
@@ -2230,38 +2445,82 @@ sap.ui.define([
             }
 
             // Sem await: o S-User e so informativo e nao pode segurar a abertura do dialogo.
-            this._carregarSUserChamadoSap();
+            this._carregarSUserChamadoSap(sRequisitante);
+            this._carregarSUserLogadoChamadoSap();
         },
 
-        // Falha nao abre MessageBox: o campo fica com o aviso e o resto do dialogo segue util.
-        _carregarSUserChamadoSap() {
+        // Espelha o campo do cliente, mas pelo e-mail do login: o ContatoSap ja fixa o customer.
+        _carregarSUserLogadoChamadoSap() {
             const oModelo = this._modeloChamadoSap();
             // O toggle de e-mail dev nao fecha o dialogo: sem esta marca a resposta lenta do
             // usuario anterior escreveria o S-User dele no campo do usuario novo.
             const iGeracao = this._iGeracaoRequisitante;
 
-            oModelo.setProperty("/sUserCarregando", true);
-            oModelo.setProperty("/sUserFalha", false);
+            oModelo.setProperty("/sUserLogadoCarregando", true);
+            oModelo.setProperty("/sUserLogadoFalha", false);
 
-            // Executor ja teve o S-User buscado no login; sem cache consulta agora e memoiza, para
-            // reabrir o dialogo nao repetir a varredura paginada de contatos da ALM.
-            const pSUser = this._pSUserRequisitante || this._memoizarSUserRequisitante(
-                this._lerUsuarioLogado().then((sEmail) => this._consultarSUser(sEmail)));
-
-            return pSUser
+            return this._lerSUserRequisitante()
                 .then((oResultado) => {
                     if (iGeracao !== this._iGeracaoRequisitante) {
                         return;
                     }
 
-                    oModelo.setProperty("/sUser", oResultado?.sUser ?? "");
-                    // Contato cadastrado sem nome ainda e S-User identificado: o status ao lado do
-                    // campo se apoia no nome e sem fallback diria "nao encontrado" com o campo cheio.
-                    oModelo.setProperty("/sUserNome", oResultado?.nome || oResultado?.sUser || "");
-                    oModelo.setProperty("/sUserFalha", oResultado?.falha === true);
+                    const sSUser = String(oResultado?.sUser ?? "");
+
+                    oModelo.setProperty("/sUserLogado", sSUser);
+                    // Sem nome na ALM o e-mail cobre; fallback SO com S-User, igual ao do cliente.
+                    oModelo.setProperty("/sUserLogadoNome",
+                        sSUser ? (oResultado?.primeiroNome || oResultado?.email || "") : "");
+                    oModelo.setProperty("/sUserLogadoFalha", oResultado?.falha === true);
                 })
                 .catch((oError) => {
                     // _memoizarSUserRequisitante nao deixa rejeitar; sobra erro ao escrever o modelo.
+                    Log.warning("Falha ao exibir o S-User do usuario logado", oError,
+                        "megawork.mwmonitorchamados.controller.Main");
+                    oModelo.setProperty("/sUserLogado", "");
+                    oModelo.setProperty("/sUserLogadoNome", "");
+                    oModelo.setProperty("/sUserLogadoFalha", true);
+                })
+                .finally(() => {
+                    oModelo.setProperty("/sUserLogadoCarregando", false);
+                });
+        },
+
+        // Falha nao abre MessageBox: o campo fica com o aviso e o resto do dialogo segue util.
+        _carregarSUserChamadoSap(sRequisitante) {
+            const oModelo = this._modeloChamadoSap();
+
+            oModelo.setProperty("/sUserCarregando", true);
+            oModelo.setProperty("/sUserFalha", false);
+
+            // Chamado sem requisitante no header nao tem por onde comecar a cadeia; "nao
+            // encontrado" e o estado honesto, e evita um 400 fixo no backend.
+            if (!sRequisitante) {
+                oModelo.setProperty("/sUser", "");
+                oModelo.setProperty("/sUserNome", "");
+                oModelo.setProperty("/sUserCarregando", false);
+
+                return Promise.resolve();
+            }
+
+            return this._lerSUserPorRequisitante(sRequisitante)
+                .then((oResultado) => {
+                    // Reabrir noutro chamado antes da resposta traria o S-User do requisitante velho.
+                    if (oModelo.getProperty("/requisitante") !== sRequisitante) {
+                        return;
+                    }
+
+                    const sSUser = String(oResultado?.sUser ?? "");
+
+                    oModelo.setProperty("/sUser", sSUser);
+                    // Sem nome na ALM o status cairia em "nao encontrado" com o S-User no campo; o
+                    // nome do header cobre. Fallback SO com S-User, senao esconderia o nao-achou.
+                    oModelo.setProperty("/sUserNome",
+                        sSUser ? (oResultado?.primeiroNome || sRequisitante) : "");
+                    oModelo.setProperty("/sUserFalha", oResultado?.falha === true);
+                })
+                .catch((oError) => {
+                    // _lerSUserPorRequisitante nao deixa rejeitar; sobra erro ao escrever o modelo.
                     Log.warning("Falha ao exibir o S-User do requisitante", oError,
                         "megawork.mwmonitorchamados.controller.Main");
                     oModelo.setProperty("/sUser", "");
@@ -2271,6 +2530,74 @@ sap.ui.define([
                 .finally(() => {
                     oModelo.setProperty("/sUserCarregando", false);
                 });
+        },
+
+        // Cache por requisitante: dois chamados do mesmo contato nao repagam a varredura da ALM.
+        _lerSUserPorRequisitante(sRequisitante) {
+            this._mSUserPorRequisitante ??= new Map();
+
+            const sChave = String(sRequisitante);
+            const pCacheada = this._mSUserPorRequisitante.get(sChave);
+
+            if (pCacheada) {
+                return pCacheada;
+            }
+
+            const pSUser = this._consultarSUserPorNome(sRequisitante);
+
+            this._mSUserPorRequisitante.set(sChave, pSUser);
+
+            pSUser.then((oResultado) => {
+                // Falha de integracao cacheada deixaria o campo em erro pela sessao inteira sem
+                // retentar; 404 e cadastro e continua valendo.
+                if (oResultado.falha === true && this._mSUserPorRequisitante.get(sChave) === pSUser) {
+                    this._mSUserPorRequisitante.delete(sChave);
+                }
+            });
+
+            return pSUser;
+        },
+
+        // Resolve SEMPRE {sUser, primeiroNome, falha}: promise cacheada que rejeita vira unhandled rejection.
+        _consultarSUserPorNome(sRequisitante) {
+            let oOperation = null;
+
+            return Promise.resolve()
+                .then(() => {
+                    // $direct: no $batch default a varredura paginada de contatos seguraria a lista.
+                    oOperation = this.getOwnerComponent().getModel().bindContext("/ContatoSapPorNome(...)",
+                        null, { $$groupId: "$direct" });
+                    oOperation.setParameter("nome", sRequisitante);
+
+                    return oOperation.invoke();
+                })
+                .then(() => oOperation.getBoundContext().requestObject())
+                .then((oContato) => ({
+                    sUser: String(oContato?.sUser ?? "").trim(),
+                    primeiroNome: String(oContato?.primeiroNome ?? "").trim(),
+                    falha: false
+                }))
+                .catch((oError) => {
+                    Log.warning(`Falha ao resolver o S-User do requisitante ${sRequisitante}`, oError,
+                        "megawork.mwmonitorchamados.controller.Main");
+
+                    // So 404 e cadastro: acusar cadastro por queda de integracao manda o usuario
+                    // abrir chamado de um problema que nao existe.
+                    return {
+                        sUser: "",
+                        primeiroNome: "",
+                        falha: Number(oError?.status ?? oError?.error?.code ?? 0) !== 404
+                    };
+                })
+                .finally(() => {
+                    oOperation?.destroy();
+                });
+        },
+
+        // Cache do prefetch do executor, ou consulta memoizada se ele nao rodou.
+        _lerSUserRequisitante() {
+            return this._pSUserRequisitante || this._memoizarSUserRequisitante(
+                this._lerUsuarioLogado().then((sEmail) => this._consultarSUser(sEmail)));
         },
 
         // Guarda de geracao: carga antiga atrasada nao sobrescreve o cache do usuario novo.
@@ -2290,7 +2617,7 @@ sap.ui.define([
                 Log.warning("Falha ao resolver o S-User do requisitante", oError,
                     "megawork.mwmonitorchamados.controller.Main");
 
-                return { sUser: "", nome: "", falha: true };
+                return { sUser: "", primeiroNome: "", email: "", falha: true };
             });
 
             this._pSUserRequisitante = pSUser;
@@ -2304,8 +2631,8 @@ sap.ui.define([
             return pSUser;
         },
 
-        // Resolve SEMPRE {sUser, nome, falha}: como promise cacheada, um reject sem consumidor
-        // viraria unhandled rejection e derrubaria a cadeia do requisitante.
+        // Resolve SEMPRE {sUser, primeiroNome, email, falha}: como promise cacheada, um reject sem
+        // consumidor viraria unhandled rejection e derrubaria a cadeia do requisitante.
         _consultarSUser(sEmail) {
             let oOperation = null;
 
@@ -2326,7 +2653,8 @@ sap.ui.define([
                 .then(() => oOperation.getBoundContext().requestObject())
                 .then((oContato) => ({
                     sUser: String(oContato?.sUser ?? "").trim(),
-                    nome: String(oContato?.nome ?? "").trim(),
+                    primeiroNome: String(oContato?.primeiroNome ?? "").trim(),
+                    email: sEmail,
                     falha: false
                 }))
                 .catch((oError) => {
@@ -2337,7 +2665,8 @@ sap.ui.define([
                     // abrir chamado de um problema que nao existe.
                     return {
                         sUser: "",
-                        nome: "",
+                        primeiroNome: "",
+                        email: sEmail,
                         falha: Number(oError?.status ?? oError?.error?.code ?? 0) !== 404
                     };
                 })
