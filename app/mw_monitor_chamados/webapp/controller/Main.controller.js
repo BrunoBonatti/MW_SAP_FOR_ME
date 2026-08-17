@@ -2141,6 +2141,18 @@ sap.ui.define([
             this._atualizarStatusChamado(oContext, "6", "Cancelado");
         },
 
+        // TODO: plugar a abertura da solicitacao de suporte SAP a partir do chamado atual.
+        // Por enquanto so avisa o usuario; oContext ja traz o chamado aberto no detalhe.
+        onDetalheAbrirChamadoSap() {
+            const oContext = this._paginaDetalhe().getBindingContext("tickets");
+
+            if (!oContext) {
+                return;
+            }
+
+            MessageToast.show("Abertura de chamado SAP ainda não implementada");
+        },
+
         async _atualizarStatusChamado(oContext, sStatus, sStatusTexto) {
             const oBundle = this._getResourceBundle();
             const sObjectID = String(oContext.getProperty("objectID") ?? "").trim();
