@@ -1,0 +1,166 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:form="sap.ui.layout.form"
+    core:require="{
+        fmt: 'megawork/mwmonitorchamados/model/formatter',
+        msg: 'sap/base/strings/formatMessage'
+    }">
+    <!-- Fora do Main.view.xml de proposito: onDetalheAbrirChamadoSap instancia sob demanda com
+         loadFragment (autoPrefixId, entao this.byId("dialogAbrirChamadoSap") continua achando). -->
+    <!-- Campos no modelo "chamadoSap", resetado a cada abertura com o chamado do detalhe. -->
+    <Dialog
+        id="dialogAbrirChamadoSap"
+        title="{i18n>abrirChamadoSapTitulo}"
+        contentWidth="40rem"
+        resizable="true"
+        draggable="true"
+        busy="{chamadoSap>/enviando}"
+        busyIndicatorDelay="0">
+        <content>
+            <MessageStrip
+                class="sapUiSmallMargin"
+                type="Information"
+                showIcon="true"
+                text="{
+                    parts: [
+                        {path: 'i18n>abrirChamadoSapFaixa'},
+                        {path: 'chamadoSap>/origemId'},
+                        {path: 'chamadoSap>/origemTitulo'}
+                    ],
+                    formatter: 'msg'
+                }" />
+            <form:SimpleForm
+                editable="true"
+                layout="ResponsiveGridLayout"
+                backgroundDesign="Transparent"
+                singleContainerFullSize="false"
+                labelSpanXL="12"
+                labelSpanL="12"
+                labelSpanM="12"
+                labelSpanS="12"
+                adjustLabelSpan="false"
+                emptySpanXL="0"
+                emptySpanL="0"
+                emptySpanM="0"
+                emptySpanS="0"
+                columnsXL="1"
+                columnsL="1"
+                columnsM="1">
+
+                <!-- Somente leitura: editar criaria divergencia com o cadastro do SAP Cloud ALM. -->
+                <Label
+                    text="{i18n>abrirChamadoSapSUser}"
+                    labelFor="inputSUserChamadoSap" />
+                <HBox width="100%" alignItems="Center">
+                    <Input
+                        id="inputSUserChamadoSap"
+                        value="{chamadoSap>/sUser}"
+                        placeholder="{i18n>abrirChamadoSapSUserVazio}"
+                        editable="false"
+                        busy="{chamadoSap>/sUserCarregando}"
+                        busyIndicatorDelay="0"
+                        width="12rem">
+                        <layoutData>
+                            <FlexItemData shrinkFactor="0" growFactor="0" />
+                        </layoutData>
+                    </Input>
+                    <!-- Falha de integracao nao pode virar "nao encontrado": acusaria o cadastro
+                         do usuario por uma queda do backend. -->
+                    <ObjectStatus
+                        class="sapUiTinyMarginBegin"
+                        text="{= ${chamadoSap>/sUserCarregando} ? ${i18n>abrirChamadoSapSUserCarregando} : (${chamadoSap>/sUserNome} || (${chamadoSap>/sUserFalha} ? ${i18n>abrirChamadoSapSUserErro} : ${i18n>abrirChamadoSapSUserNaoEncontrado})) }"
+                        state="{= ${chamadoSap>/sUserCarregando} ? 'Information' : (${chamadoSap>/sUserNome} ? 'Success' : (${chamadoSap>/sUserFalha} ? 'Error' : 'Warning')) }">
+                        <layoutData>
+                            <FlexItemData shrinkFactor="1" growFactor="1" />
+                        </layoutData>
+                    </ObjectStatus>
+                </HBox>
+
+                <Label
+                    text="{i18n>abrirChamadoSapTituloCampo}"
+                    required="true"
+                    labelFor="inputTituloChamadoSap" />
+                <Input
+                    id="inputTituloChamadoSap"
+                    value="{chamadoSap>/titulo}"
+                    placeholder="{i18n>abrirChamadoSapTituloPlaceholder}"
+                    maxLength="100"
+                    valueLiveUpdate="true"
+                    width="100%" />
+
+                <!-- Reaproveita o dialogComponentesSap do wizard; so o modelo de destino muda
+                     (ver _sModeloComponenteSap no Main.controller.js). -->
+                <Label
+                    text="{i18n>criarChamadoComponenteSap}"
+                    labelFor="btnComponentesChamadoSap" />
+                <HBox width="100%">
+                    <Button
+                        id="btnComponentesChamadoSap"
+                        text="{
+                            parts: [
+                                {path: 'chamadoSap>/componenteSap'},
+                                {path: 'i18n>criarChamadoComponentesSapBotao'}
+                            ],
+                            formatter: 'fmt.componenteSapResumo'
+                        }"
+                        icon="sap-icon://search"
+                        press=".onAbrirComponentesChamadoSap"
+                        width="100%">
+                        <layoutData>
+                            <FlexItemData shrinkFactor="0" growFactor="1" />
+                        </layoutData>
+                    </Button>
+                    <Button
+                        visible="{= !!${chamadoSap>/componenteSap} }"
+                        icon="sap-icon://decline"
+                        type="Transparent"
+                        tooltip="{i18n>criarChamadoComponentesSapLimpar}"
+                        press=".onLimparComponenteChamadoSap">
+                        <layoutData>
+                            <FlexItemData shrinkFactor="0" growFactor="0" />
+                        </layoutData>
+                    </Button>
+                </HBox>
+
+                <Label
+                    text="{i18n>abrirChamadoSapPrioridade}"
+                    labelFor="selectPrioridadeChamadoSap" />
+                <Select
+                    id="selectPrioridadeChamadoSap"
+                    selectedKey="{chamadoSap>/prioridade}"
+                    items="{codelists>/prioridadesChamado}"
+                    width="100%">
+                    <core:Item key="{codelists>code}" text="{codelists>descricao}" />
+                </Select>
+
+                <Label
+                    text="{i18n>abrirChamadoSapDescricao}"
+                    required="true"
+                    labelFor="textAreaDescricaoChamadoSap" />
+                <TextArea
+                    id="textAreaDescricaoChamadoSap"
+                    value="{chamadoSap>/descricao}"
+                    placeholder="{i18n>abrirChamadoSapDescricaoPlaceholder}"
+                    rows="6"
+                    growing="false"
+                    valueLiveUpdate="true"
+                    width="100%" />
+
+            </form:SimpleForm>
+        </content>
+        <beginButton>
+            <Button
+                id="btnConfirmarChamadoSap"
+                type="Emphasized"
+                icon="sap-icon://paper-plane"
+                text="{i18n>abrirChamadoSapConfirmar}"
+                press=".onConfirmarChamadoSap" />
+        </beginButton>
+        <endButton>
+            <Button
+                text="{i18n>abrirChamadoSapCancelar}"
+                press=".onFecharAbrirChamadoSap" />
+        </endButton>
+    </Dialog>
+</core:FragmentDefinition>

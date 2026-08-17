@@ -35,6 +35,15 @@ const MIME_TYPE_PADRAO_ANEXO = "application/octet-stream";
 
 const LIMITE_COMPONENTES_SAP = 200;
 
+// Cliente unico do contrato; env var so como escape se a Megawork mudar de numero.
+const CUSTOMER_NUMBER_SAP = process.env.SAP_CUSTOMER_NUMBER || "0000832647";
+
+// Teto por pagina imposto pelo spec da ALM.
+const LIMITE_CONTATOS_SAP = 1000;
+
+// Trava contra giro infinito se totalCount vier maior que a lista realmente paginada.
+const MAXIMO_PAGINAS_CONTATOS_SAP = 20;
+
 function escaparHtml(texto) {
     return String(texto)
         .replace(/&/g, "&amp;")
@@ -96,23 +105,17 @@ async function buscarFuncionarioPorEmail(servico, email) {
         const linhas = linhasDaResposta(await servico.run(
             SELECT.from(EmployeeCollection)
                 .columns(
-                    "EmployeeID",
                     "BusinessPartnerID",
-                    "BusinessPartnerFormattedName",
-                    "FirstName",
-                    "LastName",
-                    "Email"
+                    "BusinessPartnerFormattedName"
                 )
                 .where({ Email: email })
         ));
 
-        // Sem $top/$orderby de proposito: o mesmo e-mail pode ter mais de um registro (recontratacao,
-        // dois vinculos) e a ordem que o C4C devolve nao e contratual - com $top=1 o requisitante
-        // trocaria de BusinessPartnerID entre um F5 e outro. O desempate acontece aqui, por EmployeeID,
-        // porque um $orderby recusado pelo C4C cairia no catch e viraria "nao achou" silencioso.
+        // O mesmo e-mail pode ter mais de um registro e a ordem do C4C nao e contratual: desempate
+        // local por BusinessPartnerID, porque um $orderby recusado viraria "nao achou" no catch.
         const funcionarios = linhas.filter(Boolean);
         funcionarios.sort((a, b) =>
-            String(a.EmployeeID || "").localeCompare(String(b.EmployeeID || "")));
+            String(a.BusinessPartnerID || "").localeCompare(String(b.BusinessPartnerID || "")));
 
         return funcionarios[0] || null;
     } catch (erro) {
@@ -445,22 +448,12 @@ module.exports = cds.service.impl(async function () {
             const funcionario = await buscarFuncionarioPorEmail(employeeAndUserService, email);
             if (!funcionario) return { nome: "", contatoId: "", clientes: [], origem: "" };
 
-            const nomeFuncionario = [funcionario.FirstName, funcionario.LastName]
-                .map((parte) => String(parte || "").trim())
-                .filter(Boolean)
-                .join(" ") ||
-                String(funcionario.BusinessPartnerFormattedName || "").trim();
-
             // BusinessPartnerID e o identificador que o C4C aceita em BuyerMainContactPartyID;
-            // o EmployeeID entra so como ultimo recurso, para nao devolver contatoId vazio
-            // (vazio = frontend trata como "nao achou").
-            const idFuncionario =
-                String(funcionario.BusinessPartnerID == null ? "" : funcionario.BusinessPartnerID).trim() ||
-                String(funcionario.EmployeeID == null ? "" : funcionario.EmployeeID).trim();
-
+            // vazio aqui = o frontend trata como "nao achou" e bloqueia a tela.
             return {
-                nome: nomeFuncionario,
-                contatoId: idFuncionario,
+                nome: String(funcionario.BusinessPartnerFormattedName || "").trim(),
+                contatoId: String(funcionario.BusinessPartnerID == null
+                    ? "" : funcionario.BusinessPartnerID).trim(),
                 clientes: [],
                 origem: "funcionario"
             };
@@ -701,6 +694,85 @@ module.exports = cds.service.impl(async function () {
                 produto: String(linha.productDescription ?? ""),
                 obsoleto: Boolean(linha.obsolete)
             }))
+        };
+    });
+
+    this.on("ContatoSap", async (req) => {
+        const email = String(req.data.email || "").trim().toLowerCase();
+
+        if (!email) {
+            return req.reject(400, "Informe o e-mail para localizar o S-User no SAP Cloud ALM.");
+        }
+
+        let pessoa = null;
+        let lidos = 0;
+        let total = 0;
+        let primeiroDaPaginaAnterior = "";
+
+        try {
+            const calmItsmService = await conectarCalmItsm();
+
+            for (let pagina = 0; pagina < MAXIMO_PAGINAS_CONTATOS_SAP; pagina += 1) {
+                const parametros = new URLSearchParams({
+                    customerNumber: CUSTOMER_NUMBER_SAP,
+                    email,
+                    // Sem ALL o default e ADMIN e quem nao tem "Edit Authorizations" some da lista.
+                    authorizationObjects: "ALL",
+                    offset: String(lidos),
+                    limit: String(LIMITE_CONTATOS_SAP)
+                });
+
+                const resposta = await calmItsmService.send({
+                    method: "GET",
+                    path: `/supportcases/masterdata/contacts?${parametros}`
+                });
+
+                const linhas = Array.isArray(resposta?.results) ? resposta.results : [];
+                total = Number(resposta?.totalCount ?? linhas.length);
+                lidos += linhas.length;
+
+                // "email" nao existe no spec: a API pode ignorar o filtro e devolver a lista inteira.
+                const candidatos = linhas.filter((linha) =>
+                    String(linha.email || "").trim().toLowerCase() === email);
+                pessoa = candidatos[0] ?? null;
+
+                if (candidatos.length > 1) {
+                    LOG.warn(`${candidatos.length} S-Users com o e-mail ${email} no customer `
+                        + `${CUSTOMER_NUMBER_SAP}; usando ${candidatos[0].suser} (ordem nao contratual).`);
+                }
+
+                // API que ignorasse o offset devolveria a mesma pagina ate estourar o rate limit.
+                const primeiro = String(linhas[0]?.suser ?? "");
+                const paginaRepetida = Boolean(primeiro) && primeiro === primeiroDaPaginaAnterior;
+                primeiroDaPaginaAnterior = primeiro;
+
+                // Parar antes de cobrir totalCount viraria 404 falso com a pessoa na pagina seguinte.
+                if (pessoa || !linhas.length || paginaRepetida || lidos >= total) break;
+            }
+        } catch (erro) {
+            LOG.warn(`Falha ao ler contatos do SAP Cloud ALM: ${erro.message}`);
+            return req.reject(502,
+                `Nao foi possivel consultar os contatos do SAP Cloud ALM: ${erro.message}`);
+        }
+
+        if (!pessoa) {
+            // Varredura truncada e cadastro inexistente dao o mesmo 404 na tela.
+            if (lidos < total) {
+                LOG.warn(`Contatos lidos parcialmente (${lidos}/${total}) ao procurar ${email}.`);
+            }
+
+            return req.reject(404, `Nenhum S-User encontrado para o e-mail ${email}.`);
+        }
+
+        return {
+            sUser: String(pessoa.suser ?? ""),
+            nome: [pessoa.firstname, pessoa.surname]
+                .map((parte) => String(parte || "").trim())
+                .filter(Boolean)
+                .join(" "),
+            email: String(pessoa.email ?? ""),
+            // || e nao ??: os campos vazios da ALM chegam como "" e passariam pelo ??.
+            telefone: String(pessoa.phone || pessoa.phone2 || "")
         };
     });
 });

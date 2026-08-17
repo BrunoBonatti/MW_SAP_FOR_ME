@@ -45,6 +45,17 @@
                         <OverflowToolbarLayoutData priority="NeverOverflow" />
                     </layoutData>
                 </ToggleButton>
+                <ToggleButton
+                    id="emailPcoeButton"
+                    icon="sap-icon://employee"
+                    text="{i18n>emailPcoeTexto}"
+                    type="Transparent"
+                    press=".onAlternarEmailPcoe"
+                    tooltip="{i18n>emailPcoeTooltip}">
+                    <layoutData>
+                        <OverflowToolbarLayoutData priority="NeverOverflow" />
+                    </layoutData>
+                </ToggleButton>
                 <Button
                     id="notificationButton"
                     icon="sap-icon://bell"

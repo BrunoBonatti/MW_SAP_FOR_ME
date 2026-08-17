@@ -118,4 +118,14 @@ service IntegrationService {
     exibidos    : Integer;
     componentes : array of ComponenteSap;
   };
+
+  // CustomerSet da ALM nao tem nome completo nem telefone unico: concatenacao e escolha ficam no handler.
+  type ContatoSUser {
+    sUser    : String;
+    nome     : String;
+    email    : String;
+    telefone : String;
+  }
+
+  function ContatoSap(email : String) returns ContatoSUser;
 }
