@@ -7,8 +7,12 @@
          funcionalidades; o que muda: ids com sufixo "Sap", handlers *Sap no Main.controller.js e
          estado proprio no modelo "view" (/chatListaSap, /chatSelecionadoSap, /chatMensagensSap,
          /chatCarregandoSap) - sem isso, selecionar uma conversa aqui trocaria a conversa aberta na
-         tela Chats tambem. A lista nasce do MESMO mock (_criarChatsMock), so em outra instancia:
-         quando existir a conversa real com o SAP, e o loader do /chatListaSap que muda. -->
+         tela Chats tambem. A lista NAO e mock: nasce dos casos SAP reais - _espelharCasosSapNoChat
+         mapeia tickets>/TicketsSap (a MESMA carga da tela Acompanhar chamados SAP) para
+         /chatListaSap - e a conversa vem dos comentarios do caso na Cloud ALM
+         (/ComentariosCasoSap). Os nomes dos campos continuam sendo os do mock (nome,
+         ultimaMensagem, dataHora, naoLidas) de proposito: e o que mantem este markup e o de
+         Chats.fragment.xml identicos. -->
     <!-- Master/detail proprio: a coluna da lista (chatsColunaLista) e a coluna da conversa
          (chatsColunaConversa) sao dois VBox irmaos do Splitter, sem dependencia um do outro.
          Isso deixa a migracao futura para SplitContainer/FlexibleColumnLayout (comportamento
@@ -68,7 +72,7 @@
                     mode="SingleSelectMaster"
                     selectionChange=".onChatSelectSap"
                     items="{view>/chatListaSap}"
-                    noDataText="{i18n>chatsListaVazia}"
+                    noDataText="{i18n>chatsSapListaVazia}"
                     showSeparators="Inner"
                     class="mwListZebra">
                     <CustomListItem class="mwChatsItem">
@@ -208,12 +212,6 @@
                             type="Transparent"
                             icon="sap-icon://action-settings"
                             press=".onChatAcoes"/>
-                        <Button
-                            id="chatsBotaoInformacoesSap"
-                            text="{i18n>chatsInformacoes}"
-                            type="Transparent"
-                            icon="sap-icon://hint"
-                            press=".onChatInformacoes"/>
                     </HBox>
                 </HBox>
                 <!-- Unico scroll da tela: cabecalho e barra de envio ficam fixos. -->
@@ -246,8 +244,8 @@
                             <IllustratedMessage
                                 illustrationType="sapIllus-NoMail"
                                 illustrationSize="Small"
-                                title="{i18n>chatsSemMensagens}"
-                                description="{i18n>chatsSemMensagensDesc}"/>
+                                title="{i18n>chatsSapSemMensagens}"
+                                description="{i18n>chatsSapSemMensagensDesc}"/>
                         </noData>
                         <CustomListItem>
                             <!-- Mesmo padrao do chat do DetalheChamado: dois HBox mutuamente
@@ -383,7 +381,8 @@
                     </layoutData>
                     <!-- Mesmo controle de envio do chat do DetalheChamado: um sap.m.FeedInput,
                          que ja traz campo + avatar + botao de postar num unico controle e limpa
-                         o value depois do post (por isso o controller nao zera campo nenhum).
+                         o value depois do post - o controller so volta a mexer no value quando o
+                         POST na ALM falha, para devolver ao usuario o texto que ele digitou.
                          O HBox em volta continua aqui, e nao no lugar do FeedInput, porque esta
                          tela e de altura cheia e a barra precisa ser regiao FIXA: e o
                          .mwChatsBarraEnvio que paga o padding, a borda de cima e o
@@ -400,11 +399,16 @@
                          padding-left de 5rem para 0.5rem. O botao de anexo saiu junto com a
                          barra custom: o FeedInput nao tem anexo, e era uma acao "em
                          construcao". -->
+                    <!-- enabled cai no envio (POST da ALM sem deduplicacao) e na leitura
+                         (releitura em voo descartaria ou duplicaria a bolha do envio). -->
+                    <!-- maxLength espelha o teto do backend, senao so a recusa da ALM o revela. -->
                     <FeedInput
                         id="chatsFeedInputSap"
                         icon="sap-icon://employee"
                         placeholder="{i18n>chatsMensagemPlaceholder}"
                         buttonTooltip="{i18n>chatsEnviarTooltip}"
+                        maxLength="5000"
+                        enabled="{= ${view>/chatEnviandoSap} !== true &amp;&amp; ${view>/chatCarregandoSap} !== true }"
                         post=".onChatEnviarMensagemSap">
                         <layoutData>
                             <FlexItemData

@@ -1,8 +1,12 @@
 <core:FragmentDefinition
     xmlns="sap.m"
     xmlns:core="sap.ui.core"
-    xmlns:f="sap.f">
-    <!-- Lista propria (tickets>/TicketsSap, escopada pelo S-User), so com o correlationId. -->
+    xmlns:f="sap.f"
+    core:require="{
+        fmt: 'megawork/mwmonitorchamados/model/formatter'
+    }">
+    <!-- Lista propria (tickets>/TicketsSap): casos da ALM dos clientes que aparecem nos chamados
+         do requisitante, escopados pelo S-User dele. -->
     <VBox>
         <f:Card width="100%" class="mwCartaoLista">
             <f:content>
@@ -78,6 +82,26 @@
                                 change=".onFilterDataAberturaSap"/>
                         </VBox>
                     </HBox>
+                    <!-- Lista parcial calada afirmaria que o requisitante nao tem mais caso. -->
+                    <MessageStrip
+                        class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginBottom"
+                        type="Information"
+                        showIcon="true"
+                        visible="{tickets>/CasosSapTruncado}"
+                        text="{
+                            parts: [
+                                {path: 'tickets>/CasosSapExibidos'},
+                                {path: 'tickets>/CasosSapTotal'},
+                                {path: 'i18n>ticketsSapCasosTruncado'}
+                            ],
+                            formatter: 'fmt.componentesSapTruncado'
+                        }" />
+                    <MessageStrip
+                        class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginBottom"
+                        type="Warning"
+                        showIcon="true"
+                        visible="{tickets>/CasosSapFalha}"
+                        text="{i18n>ticketsSapCasosParcial}" />
                     <Table
                         id="ticketsTableSap"
                         items="{tickets>/TicketsSap}"
@@ -93,19 +117,36 @@
                                 title="{i18n>ticketsNoData}"
                                 description="{i18n>ticketsNoDataDesc}"/>
                         </noData>
-                        <!-- Coluna unica: o payload do Cloud ALM so traz o correlationId. -->
+                        <!-- caseNumber e subject vem do GET de detalhe; o cliente identifica de qual
+                             dos clientes do requisitante o caso saiu. -->
                         <columns>
                             <Column>
                                 <Text text="{i18n>ticketsColCorrelationId}"/>
                             </Column>
+                            <Column>
+                                <Text text="{i18n>ticketsColCaseNumber}"/>
+                            </Column>
+                            <Column>
+                                <Text text="{i18n>ticketsColSubject}"/>
+                            </Column>
+                            <Column
+                                minScreenWidth="Tablet"
+                                demandPopin="true"
+                                popinDisplay="Inline">
+                                <Text text="{i18n>ticketsColCustomerNumber}"/>
+                            </Column>
                         </columns>
                         <items>
-                            <!-- Inativa: o detalhe atual e todo do C4C e travaria os busy da linha. -->
+                            <!-- Navegavel: onTicketPressSap abre o caso da ALM pelo correlationId da linha. -->
                             <ColumnListItem
-                                type="Inactive"
-                                vAlign="Middle">
+                                type="Navigation"
+                                vAlign="Middle"
+                                press=".onTicketPressSap">
                                 <cells>
-                                    <ObjectIdentifier title="{tickets>correlationId}"/>
+                                    <Text text="{tickets>correlationId}"/>
+                                    <ObjectIdentifier title="{tickets>caseNumber}"/>
+                                    <Text text="{tickets>subject}"/>
+                                    <Text text="{tickets>customerNumber}"/>
                                 </cells>
                             </ColumnListItem>
                         </items>
