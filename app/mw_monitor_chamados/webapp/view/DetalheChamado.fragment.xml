@@ -226,7 +226,14 @@
                                         icon="sap-icon://decline"
                                         type="Reject"
                                         press=".onDetalheCancelarChamado"
-                                        enabled="{= !formatter.chamadoEncerrado(${tickets>status}) }"/>
+                                        enabled="{= !formatter.chamadoEncerrado(${tickets>status}) }"
+                                        class="sapUiTinyMarginBottom"/>
+                                    <Button
+                                        width="14rem"
+                                        text="Abrir chamado SAP"
+                                        icon="sap-icon://sap-logo-shape"
+                                        type="Emphasized"
+                                        press=".onDetalheAbrirChamadoSap"/>
                                 </VBox>
                             </VBox>
                         </f:content>
