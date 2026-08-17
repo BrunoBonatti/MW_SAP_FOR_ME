@@ -348,6 +348,29 @@
     gap: 0.25rem;
 }
 
+/* Contador de nao lidas: por padrao o ObjectStatus inverted vira uma pilula (padding
+   lateral maior que vertical), boa pra texto mas larga demais so pra 1-2 digitos. Aqui
+   fica um selo circular compacto - min-width cobre o caso de 2 digitos (ex: "12") sem
+   esmagar o numero, e o border-radius grande faz par de 1 digito parecer um circulo. */
+.mwChatsBadgeNaoLidas.sapMObjStatus {
+    min-width: 1.25rem;
+    height: 1.25rem;
+    padding: 0 0.25rem;
+    border-radius: 0.625rem;
+    justify-content: center;
+}
+.mwChatsBadgeNaoLidas .sapMObjStatusText {
+    font-weight: 700;
+}
+
+/* Status da linha/cabecalho (ObjectStatus com icone, mesmo formatter.statusState/statusIcone
+   do AcompanharChamados e do DetalheChamado): so o tamanho de fonte, pra combinar com o resto
+   da linha (title em H6/0.875rem) - o tema usa 0.875rem por padrao, um tantinho grande ao lado
+   do nome do chamado nesta lista compacta. Cor/icone continuam 100% do tema, intocados. */
+.mwChatsItemStatus.sapMObjStatus .sapMObjStatusText {
+    font-size: 0.75rem;
+}
+
 /* VBox de texto do item da lista e do cabecalho da conversa. Mesmo papel do
    .mwCockpitRecenteItem: o Title e nowrap, entao sem min-width: 0 esta VBox
    nao encolheria e empurraria o horario/contador de nao lidas para fora da
@@ -401,4 +424,27 @@
     min-height: 0;
     margin: 0.5rem 0.75rem;
     border-top: 0.0625rem solid var(--sapGroup_ContentBorderColor, #d9d9d9);
+}
+
+/* Contador do sino (view>/notificacoesTotal): o Button do ToolHeader nao tem badge nativo,
+   entao o wrap vira o ancoral posicional (position: relative) e o numero flutua sobre o
+   canto do sino. pointer-events: none para o clique continuar indo para o Button por baixo. */
+.mwNotificationBellWrap {
+    position: relative;
+}
+
+.mwNotificationBadge {
+    position: absolute;
+    top: 0.25rem;
+    right: 0.25rem;
+    min-width: 1rem;
+    height: 1rem;
+    line-height: 1rem;
+    padding: 0 0.25rem;
+    border-radius: 0.5rem;
+    background: var(--sapErrorColor, #b00);
+    color: var(--sapButton_Reject_TextColor, #fff);
+    font-size: 0.625rem;
+    text-align: center;
+    pointer-events: none;
 }

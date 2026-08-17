@@ -93,6 +93,12 @@ sap.ui.define([
 
     const MAX_TICKETS_LISTA = 100;
 
+    // _iniciarPollNotificacoesChats: intervalo entre checagens automaticas de mensagem nova
+    // (badge do sino/Chats), sem precisar de F5. 15s para nao martelar o C4C a toa - a checagem
+    // ja e em lote (ChamadosComMensagemNova), mas ainda gera 1-2 chamadas por chamado ja
+    // visualizado.
+    const INTERVALO_POLL_NOTIFICACOES_MS = 15000;
+
     // Teto de notas lidas por chamado (o chat nao tem paginacao). A leitura vem do mais NOVO
     // para o mais antigo, entao o corte descarta a conversa velha.
     const MAX_NOTAS_CHAT = 200;
@@ -246,21 +252,23 @@ sap.ui.define([
                 // Lista de recentes do cockpit: a List do card binda nesta propriedade, entao ela
                 // precisa nascer como array vazio (senao o binding comeca em undefined).
                 cockpitRecentes: [],
-                // Modulo Chats (mock, sem OData): chatLista alimenta a List da coluna esquerda,
-                // chatMensagens a List da conversa e chatSelecionado controla os dois estados da
-                // coluna direita (vazio x conversa). Nascem preenchidos/array vazio porque as Lists
-                // bindam neles desde o primeiro render.
-                chatLista: this._criarChatsMock(),
+                // Modulo Chats: chatLista alimenta a List da coluna esquerda, chatMensagens a List
+                // da conversa e chatSelecionado controla os dois estados da coluna direita (vazio x
+                // conversa). Chats real desde a integracao com o C4C - chatLista nasce vazia e e
+                // preenchida por _montarChatLista assim que os tickets carregam (ver onInit);
+                // chatMensagens so ganha dado ao abrir um chat (_selecionarChatReal), que reusa o
+                // mesmo _carregarChatDoTicket do Detalhe.
+                chatLista: [],
                 chatSelecionado: null,
                 chatMensagens: [],
                 // Alimenta o busy da List da conversa. Nasce false porque a List binda nele desde
                 // o primeiro render (binding em undefined nunca sai do estado ocupado).
                 chatCarregando: false,
-                // Modulo "Chat com SAP" (mock): copia do bloco acima com sufixo Sap. As duas telas
-                // usam os mesmos handlers e PRECISAM de estado separado - com as mesmas
-                // propriedades, selecionar uma conversa numa trocaria a conversa aberta na outra.
-                // _criarChatsMock devolve um array novo a cada chamada, entao as duas listas nao
-                // compartilham referencia (ver o comentario da funcao).
+                // Modulo "Chat com SAP": continua mock (nao existe API de mensagens no SAP Cloud
+                // ALM hoje). Mesmo padrao acima, com sufixo Sap - as duas telas usam os mesmos
+                // handlers e PRECISAM de estado separado, senao selecionar uma conversa numa
+                // trocaria a conversa aberta na outra. _criarChatsMock devolve um array novo a
+                // cada chamada, entao as duas listas nao compartilham referencia.
                 chatListaSap: this._criarChatsMock(),
                 chatSelecionadoSap: null,
                 chatMensagensSap: [],
@@ -268,7 +276,11 @@ sap.ui.define([
                 // Preenchido em _carregarRequisitante a partir de _sRequisitanteOrigem: controla
                 // a visibilidade da coluna Prioridade (Acompanhar Chamados/SAP) e a aba Criar
                 // chamado no menu lateral. Nasce false (mesma logica de podeVoltar/podeAvancar).
-                requisitanteEhFuncionario: false
+                requisitanteEhFuncionario: false,
+                // Preenchidos por _montarChatLista via _verificarNotificacoesChats: contagem de
+                // chamados com mensagem nova (badge do sino) e a lista deles (popover do sino).
+                notificacoesTotal: 0,
+                notificacoesLista: []
             }), "view");
 
             // Os arrays vem novos: Object.assign copia a REFERENCIA dos arrays do default
@@ -323,11 +335,52 @@ sap.ui.define([
                 this._carregarCockpit();
                 // Espera o S-User por dentro: encadear aqui seguraria tickets e cockpit.
                 this._carregarChamadosSap();
+
+                this._iniciarPollNotificacoesChats();
             });
         },
 
         onExit() {
             Device.media.detachHandler(this._handleWindowResize, this);
+            this._pararPollNotificacoesChats();
+        },
+
+        // Reroda _verificarNotificacoesChats a cada INTERVALO_POLL_NOTIFICACOES_MS sem precisar
+        // de F5. Pula o tick (sem juntar chamada nova) enquanto a aba esta em background
+        // (document.hidden) ou a checagem anterior ainda nao voltou - e o que evita
+        // sobreposicao caso o C4C demore mais que o intervalo. Ao voltar para a aba, dispara uma
+        // checagem imediata em vez de esperar o proximo tick, para o sino nao ficar atrasado.
+        _iniciarPollNotificacoesChats() {
+            this._pararPollNotificacoesChats();
+
+            this._fnVisibilidadePoll = () => {
+                if (!document.hidden) {
+                    this._verificarNotificacoesChats();
+                }
+            };
+            document.addEventListener("visibilitychange", this._fnVisibilidadePoll);
+
+            this._iPollNotificacoesChats = window.setInterval(() => {
+                if (document.hidden || this._bVerificandoNotificacoesChats) {
+                    return;
+                }
+
+                this._bVerificandoNotificacoesChats = true;
+                this._verificarNotificacoesChats()
+                    .finally(() => { this._bVerificandoNotificacoesChats = false; });
+            }, INTERVALO_POLL_NOTIFICACOES_MS);
+        },
+
+        _pararPollNotificacoesChats() {
+            if (this._iPollNotificacoesChats) {
+                window.clearInterval(this._iPollNotificacoesChats);
+                this._iPollNotificacoesChats = null;
+            }
+
+            if (this._fnVisibilidadePoll) {
+                document.removeEventListener("visibilitychange", this._fnVisibilidadePoll);
+                this._fnVisibilidadePoll = null;
+            }
         },
 
         onSideNavButtonPress() {
@@ -356,8 +409,44 @@ sap.ui.define([
             this._getWizard()?.invalidate();
         },
 
-        onNotificationPress() {
-            MessageToast.show(this._getResourceBundle().getText("notificationTitle"));
+        // Popover cacheado (mesmo padrao do dialogo AbrirChamadoSap): loadFragment so na primeira
+        // vez, pendurado nos dependents da view.
+        async onNotificationPress(oEvent) {
+            if (!this._pPopoverNotificacoes) {
+                this._pPopoverNotificacoes = this.loadFragment({
+                    name: "megawork.mwmonitorchamados.view.Notificacoes"
+                }).catch((oError) => {
+                    this._pPopoverNotificacoes = undefined;
+                    throw oError;
+                });
+            }
+
+            try {
+                const oPopover = await this._pPopoverNotificacoes;
+                oPopover.openBy(oEvent.getSource());
+            } catch (oError) {
+                Log.error("Falha ao carregar o popover de notificacoes", oError,
+                    "megawork.mwmonitorchamados.controller.Main");
+            }
+        },
+
+        // Clique num item do popover: fecha, navega para a aba Chats e abre aquele chamado -
+        // reusa _selecionarChatReal (mesmo caminho de quem clica direto na lista de Chats).
+        onNotificacaoPress(oEvent) {
+            const oContext = oEvent.getSource().getBindingContext("view");
+
+            if (!oContext) {
+                return;
+            }
+
+            const oChat = oContext.getObject();
+
+            this.byId("popoverNotificacoes")?.close();
+
+            this.byId("mainContents").to(this.createId("chats"));
+            this.byId("sideNavigation")?.setSelectedKey("chats");
+
+            this._selecionarChatReal(oChat);
         },
 
         // PROVISORIO (homologacao): alterna entre o usuario do shell e EMAIL_LOCAL_DEV. Recarrega
@@ -646,6 +735,10 @@ sap.ui.define([
             this._carregarChatDoTicket(oContext);
             this._lerMudancasDoC4C(oContext);
             this._carregarAnexosDoTicket(oContext);
+
+            // Abrir o detalhe por QUALQUER caminho (Acompanhar Chamados, cockpit ou a aba Chats)
+            // conta como "viu o chat" - as duas telas compartilham o mesmo card de conversa.
+            this._marcarChatVisualizado(String(oContext.getProperty("ID") ?? "").trim());
         },
 
         // Clique num item da lista de recentes do cockpit. O item vem do modelo "view" (dados crus
@@ -809,6 +902,13 @@ sap.ui.define([
                 this._montarListasDeFiltro(aLinhas);
                 oTicketsModel.setProperty("/Tickets", aLinhas);
 
+                // A aba Chats deriva da lista de tickets: toda recarga precisa remontar, nao so a
+                // do onInit. _montarChatLista mostra a lista na hora (sem notificacao ainda);
+                // _verificarNotificacoesChats busca em lote quem tem mensagem nova e remonta de
+                // novo quando a resposta chegar.
+                this._montarChatLista();
+                this._verificarNotificacoesChats();
+
                 return true;
             }).catch((oError) => {
                 Log.error("Falha ao carregar os chamados do backend", oError,
@@ -821,6 +921,149 @@ sap.ui.define([
                 aTabelas.forEach((oTable) => oTable.setBusy(false));
                 oBinding.destroy();
             });
+        },
+
+        // "Chats": lista os chamados do requisitante como conversas. Sem previa de mensagem de
+        // proposito (custaria carregar o chat de TODO chamado so para montar a lista) - mostra o
+        // status, que ja vem carregado; o texto da mensagem so aparece ao abrir o chat
+        // (_selecionarChatReal). naoLidas vem de this._oTicketsComNotificacao
+        // (_verificarNotificacoesChats) - flag (0/1), nao contador exato de mensagens.
+        _montarChatLista() {
+            const oTicketsModel = this.getOwnerComponent().getModel("tickets");
+            const aTickets = oTicketsModel.getProperty("/Tickets") ?? [];
+            const oComNotificacao = this._oTicketsComNotificacao ?? new Set();
+
+            const aChatLista = aTickets.map((oTicket) => ({
+                id: oTicket.ID,
+                nome: oTicket.titulo,
+                departamento: oTicket.statusTexto,
+                ultimaMensagem: oTicket.statusTexto,
+                dataHora: oTicket.dataAbertura,
+                // ServiceRequestUserLifeCycleStatusCode cru (nao o texto): e o que
+                // formatter.chamadoEncerrado espera, ver Chats.fragment.xml (FeedInput
+                // enabled/placeholder) e _enviarMensagemDoChat.
+                status: oTicket.status,
+                // Alimenta o Avatar da linha (iniciais + cor determinística por requisitante,
+                // ver formatter.iniciaisRequisitante/corAvatarRequisitante).
+                requisitante: oTicket.buyerMainContactPartyName,
+                naoLidas: oComNotificacao.has(oTicket.ID) ? 1 : 0
+            }))
+                // Com mensagem nova sempre primeiro (naoLidas 1 antes de 0); dentro do mesmo
+                // grupo, mais recente primeiro pela data do chamado - unico "ultima interacao"
+                // barato que a lista tem sem GET extra por chamado (ver comentario de
+                // _verificarNotificacoesChats sobre o custo de checar nota/interacao 1 a 1).
+                .sort((oA, oB) => (oB.naoLidas - oA.naoLidas)
+                    || String(oB.dataHora ?? "").localeCompare(String(oA.dataHora ?? "")));
+
+            const oViewModel = this.getView().getModel("view");
+            oViewModel.setProperty("/chatLista", aChatLista);
+
+            const aComNotificacao = aChatLista.filter((oChat) => oChat.naoLidas > 0);
+            oViewModel.setProperty("/notificacoesTotal", aComNotificacao.length);
+            oViewModel.setProperty("/notificacoesLista", aComNotificacao);
+        },
+
+        // Consulta em LOTE (uma chamada so, nao uma por chamado - ver ChamadosComMensagemNova no
+        // backend) quais chamados tem nota nova desde a ultima visualizacao. Guarda o resultado
+        // em this._oTicketsComNotificacao e remonta chatLista/badge do sino.
+        _verificarNotificacoesChats() {
+            const oTicketsModel = this.getOwnerComponent().getModel("tickets");
+            const aTickets = oTicketsModel.getProperty("/Tickets") ?? [];
+
+            const aChamados = aTickets
+                .map((oTicket) => ({ ticketId: oTicket.ID, objectID: oTicket.objectID }))
+                .filter((oChamado) => oChamado.ticketId && oChamado.objectID);
+
+            if (!aChamados.length) {
+                this._oTicketsComNotificacao = new Set();
+                this._montarChatLista();
+                return Promise.resolve();
+            }
+
+            const oOperation = this.getOwnerComponent().getModel().bindContext("/ChamadosComMensagemNova(...)");
+            oOperation.setParameter("chamados", aChamados);
+
+            return this._lerUsuarioLogado().then((sEmail) => {
+                if (sEmail) {
+                    oOperation.setParameter("email", sEmail);
+                }
+
+                return oOperation.invoke()
+                    .then(() => oOperation.getBoundContext().requestObject());
+            }).then((oResultado) => {
+                this._oTicketsComNotificacao = new Set(oResultado?.ticketIds ?? []);
+                this._sincronizarChatAbertoComNotificacao();
+                this._montarChatLista();
+            }).catch((oError) => {
+                Log.error("Falha ao verificar mensagens novas dos chamados", oError,
+                    "megawork.mwmonitorchamados.controller.Main");
+
+                this._oTicketsComNotificacao = new Set();
+                this._montarChatLista();
+            }).finally(() => {
+                oOperation.destroy();
+            });
+        },
+
+        // Marca UM chamado como visualizado agora: zera o flag localmente (feedback instantaneo,
+        // antes do POST voltar) e grava no backend para sobreviver a F5. Chamada tanto ao abrir o
+        // detalhe (_abrirDetalheDoChamado, por qualquer caminho) quanto ao abrir o chat pela aba
+        // Chats (_selecionarChatReal).
+        _marcarChatVisualizado(sTicketId) {
+            if (!sTicketId) {
+                return Promise.resolve();
+            }
+
+            if (this._oTicketsComNotificacao?.delete(sTicketId)) {
+                this._montarChatLista();
+            }
+
+            const oOperation = this.getOwnerComponent().getModel().bindContext("/MarcarChatVisualizado(...)");
+            oOperation.setParameter("ticketId", sTicketId);
+
+            return this._lerUsuarioLogado().then((sEmail) => {
+                if (sEmail) {
+                    oOperation.setParameter("email", sEmail);
+                }
+
+                return oOperation.invoke();
+            }).catch((oError) => {
+                Log.error("Falha ao marcar o chamado " + sTicketId + " como visualizado", oError,
+                    "megawork.mwmonitorchamados.controller.Main");
+            }).finally(() => {
+                oOperation.destroy();
+            });
+        },
+
+        // Chamada pelo poll (_verificarNotificacoesChats) logo depois de atualizar
+        // this._oTicketsComNotificacao: se o chamado com mensagem nova e EXATAMENTE o que esta
+        // aberto na tela (view>/chatSelecionado), o usuario ja esta olhando pra ele - nao faz
+        // sentido mostrar badge de "nao lida" num chat que esta na tela, nem deixar a mensagem
+        // nova de fora ate ele fechar/reabrir. Recarrega a conversa (mesmo bypass de cache do
+        // clique na linha, _selecionarChatReal) e marca visualizado de novo - _marcarChatVisualizado
+        // ja remove o chamado de _oTicketsComNotificacao e remonta a lista, entao o sino nao acusa.
+        _sincronizarChatAbertoComNotificacao() {
+            const oViewModel = this.getView().getModel("view");
+            const sId = String(oViewModel.getProperty("/chatSelecionado/id") ?? "").trim();
+
+            if (!sId || !this._oTicketsComNotificacao?.has(sId)) {
+                return;
+            }
+
+            const oTicketsModel = this.getOwnerComponent().getModel("tickets");
+            const sPathTicket = this._pathDoChamadoPorId(oTicketsModel, sId);
+
+            if (sPathTicket) {
+                oTicketsModel.setProperty(sPathTicket + "/chatCarregado", false);
+                this._carregarChatDoTicket(oTicketsModel.createBindingContext(sPathTicket))
+                    .then(() => {
+                        oViewModel.setProperty("/chatMensagens",
+                            oTicketsModel.getProperty(sPathTicket + "/chat") ?? []);
+                        this.byId("chatsMensagensScroll")?.scrollTo(0, 99999, 0);
+                    });
+            }
+
+            this._marcarChatVisualizado(sId);
         },
 
         // Escopo por S-User, logo roda DEPOIS dele (tickets/cockpit usam contatoId e nao esperam).
@@ -3756,14 +3999,15 @@ sap.ui.define([
             return sIso ? oCockpitDateTimeFormat.format(new Date(sIso)) : "";
         },
 
-        // ---- Chats (mock) ----
-        // Modulo 100% local: nao ha OData por tras. Toda a leitura/escrita acontece no model
-        // "view" (/chatLista, /chatSelecionado, /chatMensagens), declarado no onInit.
-        // Duas telas com o MESMO codigo: "Chats" (sufixo "") e "Chat com SAP" (sufixo "Sap"). O
-        // sufixo entra tanto nos ids dos controles quanto no nome das propriedades do modelo, entao
-        // cada tela tem lista, conversa selecionada e mensagens proprias. onChatAcoes e
-        // onChatInformacoes ficam sem variante *Sap de proposito: sao toasts sem estado e os dois
-        // fragments apontam para eles.
+        // ---- Chats ----
+        // "Chats" (sufixo "") e real: chatLista vem dos chamados do requisitante (_montarChatLista)
+        // e abrir um chat reusa o MESMO _carregarChatDoTicket que o card de chat do Detalhe usa -
+        // ver _selecionarChatReal/_enviarMensagemChatReal.
+        // "Chat com SAP" (sufixo "Sap") continua mock: nao existe API de mensagens do lado SAP
+        // Cloud ALM hoje. As duas telas compartilham handler; o sufixo entra tanto nos ids dos
+        // controles quanto no nome das propriedades do modelo "view", entao cada uma tem lista,
+        // conversa selecionada e mensagens proprias. onChatAcoes e onChatInformacoes ficam sem
+        // variante *Sap de proposito: sao toasts sem estado e os dois fragments apontam para eles.
 
         onChatSelect(oEvent) {
             this._selecionarChat(oEvent, "");
@@ -3785,6 +4029,13 @@ sap.ui.define([
             }
 
             const oChat = oContext.getObject();
+
+            if (sSufixo === "") {
+                this._selecionarChatReal(oChat);
+                return;
+            }
+
+            // ---- Chat com SAP (mock) ----
             const oModel = this.getView().getModel("view");
 
             // O ciclo do chatCarregando espelha o do chatCarregando do detalhe e existe para a
@@ -3802,6 +4053,68 @@ sap.ui.define([
             oModel.setProperty(oContext.getPath() + "/naoLidas", 0);
 
             this.byId("chatsMensagensScroll" + sSufixo)?.scrollTo(0, 99999, 0);
+        },
+
+        // "Chats" (C4C): resolve a linha real do ticket pelo ID e reusa _carregarChatDoTicket (o
+        // MESMO loader/cache que o card de chat do Detalhe usa - nada de reimplementar leitura de
+        // notas/interacoes aqui) contra ela; o resultado e copiado para /chatMensagens, que o
+        // fragment ja consome.
+        _selecionarChatReal(oChat) {
+            const oViewModel = this.getView().getModel("view");
+            const oTicketsModel = this.getOwnerComponent().getModel("tickets");
+            const sId = String(oChat.id ?? "").trim();
+            const sPathTicket = this._pathDoChamadoPorId(oTicketsModel, sId);
+
+            if (!sPathTicket) {
+                return;
+            }
+
+            oViewModel.setProperty("/chatSelecionado", oChat);
+            oViewModel.setProperty("/chatCarregando", true);
+
+            // chatCarregado e a guarda que faz _carregarChatDoTicket pular a releitura (mesmo
+            // truque do botao de refresh do Detalhe, _atualizarCamposDoChamado acima): zera-la
+            // aqui faz CADA clique na linha do chat buscar notas/interacoes novas no C4C, em vez
+            // de servir o /chat que ja estava carregado da ultima vez que este chamado foi
+            // aberto. O clique so chega aqui quando o sap.m.List de fato dispara selectionChange
+            // (troca de chamado selecionado, ou reabertura apos onChatFechar zerar
+            // /chatSelecionado) - clicar de novo na MESMA linha ja selecionada nao gera evento
+            // nenhum no List com mode SingleSelectMaster, entao esse caso continua exigindo o
+            // botao de fechar (onChatFechar) antes de reabrir.
+            oTicketsModel.setProperty(sPathTicket + "/chatCarregado", false);
+
+            this._carregarChatDoTicket(oTicketsModel.createBindingContext(sPathTicket))
+                .then(() => {
+                    oViewModel.setProperty("/chatMensagens",
+                        oTicketsModel.getProperty(sPathTicket + "/chat") ?? []);
+                })
+                .finally(() => {
+                    oViewModel.setProperty("/chatCarregando", false);
+                    this.byId("chatsMensagensScroll")?.scrollTo(0, 99999, 0);
+                });
+
+            this._marcarChatVisualizado(sId);
+        },
+
+        // Fecha a conversa aberta (botao chatsBotaoFechar) e invalida o cache de
+        // _carregarChatDoTicket para aquela linha: reabrir o MESMO chamado busca notas/interacoes
+        // do C4C de novo em vez de servir o /chat ja carregado (chatCarregado true), trazendo
+        // mensagem nova que tenha chegado enquanto a conversa estava fechada.
+        onChatFechar() {
+            const oViewModel = this.getView().getModel("view");
+            const oChatSelecionado = oViewModel.getProperty("/chatSelecionado");
+
+            if (oChatSelecionado) {
+                const oTicketsModel = this.getOwnerComponent().getModel("tickets");
+                const sPathTicket = this._pathDoChamadoPorId(oTicketsModel, String(oChatSelecionado.id ?? "").trim());
+
+                if (sPathTicket) {
+                    oTicketsModel.setProperty(sPathTicket + "/chatCarregado", false);
+                }
+            }
+
+            oViewModel.setProperty("/chatSelecionado", null);
+            oViewModel.setProperty("/chatMensagens", []);
         },
 
         // Atende os eventos search e liveChange do mesmo SearchField: um deles traz "query",
@@ -3862,6 +4175,22 @@ sap.ui.define([
                 return;
             }
 
+            if (sSufixo === "") {
+                // Rede de seguranca: o enabled do FeedInput ja bloqueia chamado encerrado (mesmo
+                // formatter.chamadoEncerrado do DetalheChamado, onDetalheEnviarMensagem). O toast
+                // e necessario porque o FeedInput limpa o value ao postar.
+                if (formatter.chamadoEncerrado(oChat.status)) {
+                    Log.info("Envio de mensagem bloqueado: chamado encerrado", String(oChat.status ?? ""),
+                        "megawork.mwmonitorchamados.controller.Main");
+                    MessageToast.show(this._getResourceBundle().getText("detalheChatBloqueadoEncerrado"));
+                    return;
+                }
+
+                this._enviarMensagemChatReal(oChat, sTexto);
+                return;
+            }
+
+            // ---- Chat com SAP (mock) ----
             const oMensagem = {
                 id: "m" + Date.now(),
                 autor: AUTOR_MENSAGEM_PROPRIA,
@@ -3887,12 +4216,82 @@ sap.ui.define([
             this.byId("chatsMensagensScroll" + sSufixo)?.scrollTo(0, 99999, 0);
         },
 
+        // "Chats" (C4C): mesmo envio que onDetalheEnviarMensagem usa (_enviarMensagemAoC4C +
+        // _substituirMensagemLocalPorC4C contra tickets>chat) - so que otimista contra
+        // /chatMensagens (sem sufixo) em vez da List do card do Detalhe.
+        _enviarMensagemChatReal(oChat, sTexto) {
+            const oViewModel = this.getView().getModel("view");
+            const oTicketsModel = this.getOwnerComponent().getModel("tickets");
+            const sId = String(oChat.id ?? "").trim();
+            const sPathTicket = this._pathDoChamadoPorId(oTicketsModel, sId);
+
+            if (!sPathTicket) {
+                return;
+            }
+
+            const sObjectID = String(oTicketsModel.getProperty(sPathTicket + "/objectID") ?? "").trim();
+
+            const aChat = (oTicketsModel.getProperty(sPathTicket + "/chat") ?? []).concat([{
+                autor: this._sRequisitanteNome || this._getResourceBundle().getText("criarChamadoRequisitante"),
+                texto: sTexto,
+                quando: this._agoraIso(),
+                eu: true
+            }]);
+
+            oTicketsModel.setProperty(sPathTicket + "/chat", aChat);
+            oViewModel.setProperty("/chatMensagens", aChat);
+
+            this.byId("chatsMensagensScroll")?.scrollTo(0, 99999, 0);
+
+            this._enviarMensagemAoC4C(sId, sObjectID, sTexto)
+                .then((oResposta) => {
+                    this._substituirMensagemLocalPorC4C(sId, sTexto, oResposta);
+                    oViewModel.setProperty("/chatMensagens",
+                        oTicketsModel.getProperty(sPathTicket + "/chat") ?? []);
+                })
+                .catch((oError) => {
+                    Log.error("Falha ao enviar mensagem ao C4C (Chats)", oError,
+                        "megawork.mwmonitorchamados.controller.Main");
+                    MessageToast.show(this._getResourceBundle().getText("detalheChatErroEnviar"));
+                });
+        },
+
+        // Agora so do mock "Chat com SAP" (ChatsSap.fragment.xml): o "Ações" da aba Chats real
+        // virou MenuButton (onChatAcaoDetalhes/onChatAcaoAnexos) e o botão "Informações" saiu de
+        // lá - sem API de detalhe pro lado SAP Cloud ALM ainda, os dois continuam so toast aqui.
         onChatAcoes() {
             MessageToast.show(this._getResourceBundle().getText("chatsAcaoIndisponivel"));
         },
 
         onChatInformacoes() {
             MessageToast.show(this._getResourceBundle().getText("chatsAcaoIndisponivel"));
+        },
+
+        // Botao "Ações" da aba Chats real (Chats.fragment.xml): unica acao, vai direto pro
+        // Detalhe do chamado.
+        onChatAcaoDetalhes() {
+            this._abrirChatSelecionadoNoDetalhe();
+        },
+
+        // Resolve o chamado aberto na aba Chats (view>/chatSelecionado) para o Context do modelo
+        // "tickets" que _abrirDetalheDoChamado exige, e navega - mesmo caminho de quem clica
+        // direto numa linha de Acompanhar Chamados.
+        _abrirChatSelecionadoNoDetalhe() {
+            const oChat = this.getView().getModel("view").getProperty("/chatSelecionado");
+            const sId = String(oChat?.id ?? "").trim();
+
+            if (!sId) {
+                return;
+            }
+
+            const oTicketsModel = this.getOwnerComponent().getModel("tickets");
+            const sPathTicket = this._pathDoChamadoPorId(oTicketsModel, sId);
+
+            if (!sPathTicket) {
+                return;
+            }
+
+            this._abrirDetalheDoChamado(oTicketsModel.getContext(sPathTicket));
         },
 
         // Espelha _pathDoChamadoPorId: a lista pode estar filtrada ou reordenada, entao gravar

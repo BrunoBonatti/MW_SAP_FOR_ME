@@ -14,6 +14,20 @@ sap.ui.define([
         return !!(sValor && String(sValor).trim());
     }
 
+    // Paleta curada do proprio tema (sap.m.AvatarColor "Accent"): ja vem harmonica em claro e
+    // escuro, sem inventar cor nova. So os primeiros 6 - suficiente pra distinguir requisitantes
+    // na lista de Chats sem virar arco-iris.
+    var A_AVATAR_CORES = ["Accent1", "Accent2", "Accent3", "Accent4", "Accent5", "Accent6"];
+
+    // Hash simples (mesmo requisitante = mesma cor sempre, sem guardar mapeamento em lugar nenhum).
+    function iHashTexto(sTexto) {
+        var iHash = 0;
+        for (var i = 0; i < sTexto.length; i++) {
+            iHash = (iHash * 31 + sTexto.charCodeAt(i)) >>> 0;
+        }
+        return iHash;
+    }
+
     // Funcao de modulo (nao metodo): formatter chamado do XML nao recebe o formatter como "this".
     function bStatusEncerrado(sCode) {
         return A_STATUS_ENCERRADO.indexOf(String(sCode == null ? "" : sCode).trim().toUpperCase()) >= 0;
@@ -459,6 +473,31 @@ sap.ui.define([
         /** Alias publico de oDataDeTexto, mantido como API documentada em docs/. */
         _parseData: function (sData) {
             return oDataDeTexto(sData);
+        },
+
+        /** Iniciais (1-2 letras) do requisitante para o Avatar da lista de Chats. */
+        iniciaisRequisitante: function (sNome) {
+            var aPalavras = String(sNome || "").trim().split(/\s+/).filter(Boolean);
+
+            if (!aPalavras.length) {
+                return "";
+            }
+
+            var sPrimeira = aPalavras[0].charAt(0);
+            var sUltima = aPalavras.length > 1 ? aPalavras[aPalavras.length - 1].charAt(0) : "";
+
+            return (sPrimeira + sUltima).toUpperCase();
+        },
+
+        /** sap.m.AvatarColor determinístico por nome: mesmo requisitante sempre com a mesma cor. */
+        corAvatarRequisitante: function (sNome) {
+            var sTexto = String(sNome || "").trim();
+
+            if (!sTexto) {
+                return "Accent6";
+            }
+
+            return A_AVATAR_CORES[iHashTexto(sTexto) % A_AVATAR_CORES.length];
         }
     };
 });

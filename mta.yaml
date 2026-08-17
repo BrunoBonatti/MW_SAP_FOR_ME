@@ -27,6 +27,15 @@ modules:
     requires:
       - name: mw-monitor-chamados-auth
       - name: mw-monitor-chamados-destination
+      - name: mw-monitor-chamados-db
+
+  - name: mw-monitor-chamados-db-deployer
+    type: hdb
+    path: gen/db
+    parameters:
+      buildpack: nodejs_buildpack
+    requires:
+      - name: mw-monitor-chamados-db
 
   - name: mw-monitor-chamados-app-deployer
     type: com.sap.application.content
@@ -117,10 +126,14 @@ resources:
           credential-types:
             - "binding-secret"
             - "x509"
-  # Sem HANA de propósito: o serviço não tem nenhuma entidade persistida (todas as entidades
-  # são projeções sobre o C4C, servidas por handlers em srv/app-service.js). Se algum dia
-  # entrar tabela de verdade, voltar com um resource hdi-container + módulo hdb apontando
-  # para gen/db, e um requires no módulo -srv.
+  # Primeira entidade persistida do projeto (ChatVisualizacoes, db/schema.cds — controle de
+  # "chamado visualizado" por requisitante, para a notificação de mensagem nova em Chats/sino
+  # sobreviver a F5). Até aqui tudo era projeção sobre o C4C, sem HANA nenhum.
+  - name: mw-monitor-chamados-db
+    type: com.sap.xs.hdi-container
+    parameters:
+      service: hana
+      service-plan: hdi-shared
   - name: mw-monitor-chamados-destination
     type: org.cloudfoundry.managed-service
     parameters:

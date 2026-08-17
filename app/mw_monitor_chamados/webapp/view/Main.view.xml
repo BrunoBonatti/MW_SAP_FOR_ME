@@ -56,16 +56,21 @@
                         <OverflowToolbarLayoutData priority="NeverOverflow" />
                     </layoutData>
                 </ToggleButton>
-                <Button
-                    id="notificationButton"
-                    icon="sap-icon://bell"
-                    type="Transparent"
-                    press=".onNotificationPress"
-                    tooltip="{i18n>notificationButtonTooltip}">
+                <HBox class="mwNotificationBellWrap">
                     <layoutData>
                         <OverflowToolbarLayoutData closeOverflowOnInteraction="false" />
                     </layoutData>
-                </Button>
+                    <Button
+                        id="notificationButton"
+                        icon="sap-icon://bell"
+                        type="Transparent"
+                        press=".onNotificationPress"
+                        tooltip="{i18n>notificationButtonTooltip}"/>
+                    <Text
+                        text="{view>/notificacoesTotal}"
+                        visible="{= ${view>/notificacoesTotal} > 0 }"
+                        class="mwNotificationBadge"/>
+                </HBox>
             </tnt:ToolHeader>
         </tnt:header>
         <tnt:sideContent>
@@ -106,7 +111,8 @@
                         <tnt:NavigationListItem
                             key="acompanharChamadosSap"
                             text="{i18n>sideContentTrackTicketsSap}"
-                            icon="sap-icon://sap-logo-shape" />
+                            icon="sap-icon://sap-logo-shape"
+                            enabled="{= ${view>/requisitanteEhFuncionario} }" />
                         <tnt:NavigationListItem
                             key="chatsSap"
                             text="{i18n>sideContentChatSap}"
