@@ -90,6 +90,23 @@
                             width="100%"
                             alignItems="Baseline"
                             justifyContent="SpaceBetween">
+                            <!-- alignSelf="Center" SÓ no Avatar: a HBox continua Baseline para o
+                                 par nome/data alinhar como antes (ver comentário acima) - o Avatar
+                                 nao tem baseline de texto, entao herdar Baseline o empurraria pro
+                                 fundo da linha. FlexItemData por item, sem tocar alignItems do
+                                 HBox. -->
+                            <Avatar
+                                initials="{path: 'view>requisitante', formatter: 'formatter.iniciaisRequisitante'}"
+                                backgroundColor="{path: 'view>requisitante', formatter: 'formatter.corAvatarRequisitante'}"
+                                displaySize="XS"
+                                class="sapUiTinyMarginEnd">
+                                <layoutData>
+                                    <FlexItemData
+                                        growFactor="0"
+                                        shrinkFactor="0"
+                                        alignSelf="Center"/>
+                                </layoutData>
+                            </Avatar>
                             <!-- minWidth="0" e o que permite o nome e a ultima mensagem truncarem
                                  em "..." em vez de estourar a largura da coluna. -->
                             <VBox class="mwChatsItemTexto">
@@ -104,11 +121,15 @@
                                     level="H4"
                                     titleStyle="H6"
                                     wrapping="false"/>
-                                <Text
+                                <!-- Mesmos formatters de status do AcompanharChamados/DetalheChamado
+                                     (formatter.statusState/statusIcone contra view>status cru): a
+                                     cor do status bate com o resto do app em vez de reinventar. -->
+                                <ObjectStatus
                                     text="{view>ultimaMensagem}"
-                                    maxLines="1"
-                                    wrapping="false"
-                                    class="mwLegenda"/>
+                                    state="{path: 'view>status', formatter: 'formatter.statusState'}"
+                                    icon="{path: 'view>status', formatter: 'formatter.statusIcone'}"
+                                    inverted="true"
+                                    class="mwChatsItemStatus"/>
                             </VBox>
                             <VBox
                                 alignItems="End"
@@ -127,7 +148,8 @@
                                     state="Information"
                                     inverted="true"
                                     visible="{= ${view>naoLidas} &gt; 0 }"
-                                    tooltip="{i18n>chatsNaoLidasTooltip}"/>
+                                    tooltip="{i18n>chatsNaoLidasTooltip}"
+                                    class="mwChatsBadgeNaoLidas"/>
                             </VBox>
                         </HBox>
                     </CustomListItem>
@@ -169,6 +191,18 @@
                     alignItems="Center"
                     justifyContent="SpaceBetween"
                     class="mwChatsCabecalho">
+                    <Avatar
+                        id="chatsCabecalhoAvatar"
+                        initials="{path: 'view>/chatSelecionado/requisitante', formatter: 'formatter.iniciaisRequisitante'}"
+                        backgroundColor="{path: 'view>/chatSelecionado/requisitante', formatter: 'formatter.corAvatarRequisitante'}"
+                        displaySize="S"
+                        class="sapUiSmallMarginEnd">
+                        <layoutData>
+                            <FlexItemData
+                                growFactor="0"
+                                shrinkFactor="0"/>
+                        </layoutData>
+                    </Avatar>
                     <VBox
                         id="chatsCabecalhoTextoBox"
                         class="mwChatsItemTexto">
@@ -184,11 +218,15 @@
                             level="H3"
                             titleStyle="H5"
                             wrapping="false"/>
-                        <Text
+                        <!-- Mesmo ObjectStatus/formatters da linha da lista (statusState/statusIcone):
+                             a cor do status no cabecalho bate com a da lista e com o resto do app. -->
+                        <ObjectStatus
                             id="chatsCabecalhoDepartamento"
                             text="{view>/chatSelecionado/departamento}"
-                            wrapping="false"
-                            class="mwLegenda"/>
+                            state="{path: 'view>/chatSelecionado/status', formatter: 'formatter.statusState'}"
+                            icon="{path: 'view>/chatSelecionado/status', formatter: 'formatter.statusIcone'}"
+                            inverted="true"
+                            class="mwChatsItemStatus"/>
                     </VBox>
                     <HBox alignItems="Center">
                         <layoutData>
@@ -196,18 +234,29 @@
                                 growFactor="0"
                                 shrinkFactor="0"/>
                         </layoutData>
+                        <!-- Botao simples (nao MenuButton): uma acao so nao justifica dropdown.
+                             Informacoes saiu daqui (ficou so no mock ChatsSap, que continua com
+                             onChatAcoes/onChatInformacoes originais - ver comentario mais acima
+                             sobre os dois fragments compartilharem esses handlers). -->
                         <Button
                             id="chatsBotaoAcoes"
                             text="{i18n>chatsAcoes}"
                             type="Transparent"
                             icon="sap-icon://action-settings"
-                            press=".onChatAcoes"/>
+                            press=".onChatAcaoDetalhes"/>
+                        <!-- Fecha a conversa sem sair da aba: volta ao estado vazio e invalida o
+                             cache de _carregarChatDoTicket (ver onChatFechar), entao reabrir o
+                             MESMO chamado busca notas/interacoes de novo em vez de servir o
+                             /chat ja carregado - e o jeito de pegar mensagem nova sem F5 na
+                             pagina toda. So icone (sem texto) porque o botao fica ao lado de
+                             Acoes, que ja tem texto - um segundo rotulo apertaria o cabecalho em
+                             telas estreitas. -->
                         <Button
-                            id="chatsBotaoInformacoes"
-                            text="{i18n>chatsInformacoes}"
+                            id="chatsBotaoFechar"
+                            tooltip="{i18n>chatsFecharTooltip}"
                             type="Transparent"
-                            icon="sap-icon://hint"
-                            press=".onChatInformacoes"/>
+                            icon="sap-icon://decline"
+                            press=".onChatFechar"/>
                     </HBox>
                 </HBox>
                 <!-- Unico scroll da tela: cabecalho e barra de envio ficam fixos. -->
@@ -394,11 +443,18 @@
                          padding-left de 5rem para 0.5rem. O botao de anexo saiu junto com a
                          barra custom: o FeedInput nao tem anexo, e era uma acao "em
                          construcao". -->
+                    <!-- enabled/placeholder no mesmo padrao do FeedInput do DetalheChamado
+                         (formatter.chamadoEncerrado contra view>/chatSelecionado/status em vez
+                         de tickets>status - ver _montarChatLista): chamado encerrado (Concluido/
+                         Fechado) nao aceita mensagem nova. A rede de seguranca fica em
+                         _enviarMensagemDoChat, para o caso do FeedInput ainda estar habilitado
+                         com dado velho no instante do post. -->
                     <FeedInput
                         id="chatsFeedInput"
                         icon="sap-icon://employee"
-                        placeholder="{i18n>chatsMensagemPlaceholder}"
+                        placeholder="{= formatter.chamadoEncerrado(${view>/chatSelecionado/status}) ? ${i18n>detalheChatBloqueadoEncerrado} : ${i18n>chatsMensagemPlaceholder} }"
                         buttonTooltip="{i18n>chatsEnviarTooltip}"
+                        enabled="{= !formatter.chamadoEncerrado(${view>/chatSelecionado/status}) }"
                         post=".onChatEnviarMensagem">
                         <layoutData>
                             <FlexItemData
