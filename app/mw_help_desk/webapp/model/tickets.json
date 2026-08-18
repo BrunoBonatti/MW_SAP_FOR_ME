@@ -1,0 +1,148 @@
+{
+  "Tickets": [
+    {
+      "ID": "TCK-0001",
+      "titulo": "Sistema SAP não abre após atualização do GUI",
+      "tipo": "Incidente",
+      "prioridade": "CRITICA",
+      "status": "EM_ANDAMENTO",
+      "responsavelId": "U001",
+      "dataAbertura": "2026-07-01T08:15:00"
+    },
+    {
+      "ID": "TCK-0002",
+      "titulo": "Solicitação de acesso à transação VA01",
+      "tipo": "Suporte Interno",
+      "prioridade": "MEDIA",
+      "status": "ABERTO",
+      "responsavelId": "",
+      "dataAbertura": "2026-07-02T09:40:00"
+    },
+    {
+      "ID": "TCK-0003",
+      "titulo": "Impressora do setor financeiro sem comunicação",
+      "tipo": "Incidente",
+      "prioridade": "ALTA",
+      "status": "AGUARDANDO",
+      "responsavelId": "U002",
+      "dataAbertura": "2026-07-03T14:05:00"
+    },
+    {
+      "ID": "TCK-0004",
+      "titulo": "Dúvida sobre lançamento de nota fiscal de devolução",
+      "tipo": "Suporte Interno",
+      "prioridade": "BAIXA",
+      "status": "CONCLUIDO",
+      "responsavelId": "U003",
+      "dataAbertura": "2026-07-06T10:30:00"
+    },
+    {
+      "ID": "TCK-0005",
+      "titulo": "Erro ao aprovar pedido de compras no workflow",
+      "tipo": "Incidente",
+      "prioridade": "ALTA",
+      "status": "EM_ANDAMENTO",
+      "responsavelId": "U004",
+      "dataAbertura": "2026-07-07T11:20:00"
+    },
+    {
+      "ID": "TCK-0006",
+      "titulo": "Melhoria no relatório de vendas por região",
+      "tipo": "Melhoria - Cross",
+      "prioridade": "MEDIA",
+      "status": "ABERTO",
+      "responsavelId": "",
+      "dataAbertura": "2026-07-08T16:45:00"
+    },
+    {
+      "ID": "TCK-0007",
+      "titulo": "VPN desconectando a cada 10 minutos no home office",
+      "tipo": "Incidente",
+      "prioridade": "ALTA",
+      "status": "EM_ANDAMENTO",
+      "responsavelId": "U005",
+      "dataAbertura": "2026-07-09T08:55:00"
+    },
+    {
+      "ID": "TCK-0008",
+      "titulo": "Solicitação de instalação do Microsoft Teams",
+      "tipo": "Suporte Interno",
+      "prioridade": "BAIXA",
+      "status": "CONCLUIDO",
+      "responsavelId": "U002",
+      "dataAbertura": "2026-07-10T13:10:00"
+    },
+    {
+      "ID": "TCK-0009",
+      "titulo": "Dúvida sobre preenchimento do centro de custo",
+      "tipo": "Suporte Interno",
+      "prioridade": "BAIXA",
+      "status": "CANCELADO",
+      "responsavelId": "",
+      "dataAbertura": "2026-07-13T09:00:00"
+    },
+    {
+      "ID": "TCK-0010",
+      "titulo": "Banco de dados de produção com lentidão severa",
+      "tipo": "Incidente",
+      "prioridade": "CRITICA",
+      "status": "ABERTO",
+      "responsavelId": "U001",
+      "dataAbertura": "2026-07-15T10:30:00"
+    },
+    {
+      "ID": "TCK-0011",
+      "titulo": "Melhoria: incluir filtro por período no dashboard de chamados",
+      "tipo": "Melhoria - Cross",
+      "prioridade": "BAIXA",
+      "status": "AGUARDANDO",
+      "responsavelId": "U003",
+      "dataAbertura": "2026-07-16T15:25:00"
+    },
+    {
+      "ID": "TCK-0012",
+      "titulo": "Reset de senha do usuário de rede",
+      "tipo": "Suporte Interno",
+      "prioridade": "MEDIA",
+      "status": "CONCLUIDO",
+      "responsavelId": "U004",
+      "dataAbertura": "2026-07-17T08:20:00"
+    },
+    {
+      "ID": "TCK-0013",
+      "titulo": "Erro de autorização ao executar job de faturamento",
+      "tipo": "Incidente",
+      "prioridade": "ALTA",
+      "status": "AGUARDANDO",
+      "responsavelId": "U005",
+      "dataAbertura": "2026-07-20T17:40:00"
+    },
+    {
+      "ID": "TCK-0014",
+      "titulo": "Dúvida sobre exportação de relatório para Excel",
+      "tipo": "Suporte Interno",
+      "prioridade": "BAIXA",
+      "status": "ABERTO",
+      "responsavelId": "",
+      "dataAbertura": "2026-07-22T11:05:00"
+    },
+    {
+      "ID": "TCK-0015",
+      "titulo": "Notebook não liga após queda de energia",
+      "tipo": "Incidente",
+      "prioridade": "MEDIA",
+      "status": "EM_ANDAMENTO",
+      "responsavelId": "U002",
+      "dataAbertura": "2026-07-24T09:50:00"
+    },
+    {
+      "ID": "TCK-0016",
+      "titulo": "Melhoria no fluxo de aprovação de despesas de viagem",
+      "tipo": "Melhoria - Cross",
+      "prioridade": "MEDIA",
+      "status": "ABERTO",
+      "responsavelId": "U001",
+      "dataAbertura": "2026-07-28T14:35:00"
+    }
+  ]
+}

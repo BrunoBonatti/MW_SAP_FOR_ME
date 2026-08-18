@@ -1,0 +1,158 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:f="sap.f"
+    core:require="{
+        fmt: 'megawork/mwhelpdesk/model/formatter'
+    }">
+    <!-- Lista propria (tickets>/TicketsSap): casos da ALM dos clientes que aparecem nos chamados
+         do requisitante, escopados pelo S-User dele. -->
+    <VBox>
+        <f:Card width="100%" class="mwCartaoLista">
+            <f:content>
+                <VBox width="100%">
+                    <HBox
+                        justifyContent="End"
+                        alignItems="Center"
+                        class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiSmallMarginTop sapUiSmallMarginBottom">
+                        <!-- Escondido: ordena por campo do C4C que este payload nao tem. -->
+                        <Button
+                            icon="sap-icon://sort"
+                            type="Transparent"
+                            visible="false"
+                            tooltip="{i18n>ticketsSortTooltip}"
+                            press=".onSortTicketsSap"
+                            class="sapUiTinyMarginEnd"/>
+                        <Button
+                            icon="sap-icon://refresh"
+                            type="Transparent"
+                            tooltip="{i18n>ticketsRefreshTooltip}"
+                            press=".onRefreshTicketsSap"/>
+                    </HBox>
+                    <HBox
+                        wrap="Wrap"
+                        alignItems="End"
+                        class="mwFiltroBarra sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiSmallMarginBottom">
+                        <VBox class="sapUiSmallMarginEnd sapUiTinyMarginBottom">
+                            <Label
+                                text="{i18n>ticketsFiltroPesquisa}"
+                                labelFor="searchTicketsSap"/>
+                            <SearchField
+                                id="searchTicketsSap"
+                                width="18rem"
+                                placeholder="{i18n>ticketsSearchPlaceholder}"
+                                search=".onSearchTicketsSap"
+                                liveChange=".onSearchTicketsSap"/>
+                        </VBox>
+                        <!-- Escondidos: campos inexistentes no payload. -->
+                        <VBox visible="false" class="sapUiSmallMarginEnd sapUiTinyMarginBottom">
+                            <Label
+                                text="{i18n>ticketsFiltroStatus}"
+                                labelFor="selectStatusSap"/>
+                            <Select
+                                id="selectStatusSap"
+                                width="12rem"
+                                tooltip="{i18n>ticketsFiltroStatus}"
+                                change=".onFilterTicketsSap"
+                                items="{tickets>/FiltroStatus}">
+                                <core:Item key="{tickets>code}" text="{tickets>descricao}"/>
+                            </Select>
+                        </VBox>
+                        <VBox visible="false" class="sapUiSmallMarginEnd sapUiTinyMarginBottom">
+                            <Label
+                                text="{i18n>ticketsFiltroPrioridade}"
+                                labelFor="selectPrioridadeSap"/>
+                            <Select
+                                id="selectPrioridadeSap"
+                                width="12rem"
+                                tooltip="{i18n>ticketsFiltroPrioridade}"
+                                change=".onFilterTicketsSap"
+                                items="{tickets>/FiltroPrioridade}">
+                                <core:Item key="{tickets>code}" text="{tickets>descricao}"/>
+                            </Select>
+                        </VBox>
+                        <VBox visible="false" class="sapUiSmallMarginEnd sapUiTinyMarginBottom">
+                            <Label
+                                text="{i18n>ticketsFiltroDataAbertura}"
+                                labelFor="drsDataAberturaSap"/>
+                            <DateRangeSelection
+                                id="drsDataAberturaSap"
+                                width="16rem"
+                                placeholder="{i18n>ticketsDataAberturaPlaceholder}"
+                                change=".onFilterDataAberturaSap"/>
+                        </VBox>
+                    </HBox>
+                    <!-- Lista parcial calada afirmaria que o requisitante nao tem mais caso. -->
+                    <MessageStrip
+                        class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginBottom"
+                        type="Information"
+                        showIcon="true"
+                        visible="{tickets>/CasosSapTruncado}"
+                        text="{
+                            parts: [
+                                {path: 'tickets>/CasosSapExibidos'},
+                                {path: 'tickets>/CasosSapTotal'},
+                                {path: 'i18n>ticketsSapCasosTruncado'}
+                            ],
+                            formatter: 'fmt.componentesSapTruncado'
+                        }" />
+                    <MessageStrip
+                        class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginBottom"
+                        type="Warning"
+                        showIcon="true"
+                        visible="{tickets>/CasosSapFalha}"
+                        text="{i18n>ticketsSapCasosParcial}" />
+                    <Table
+                        id="ticketsTableSap"
+                        items="{tickets>/TicketsSap}"
+                        growing="true"
+                        growingThreshold="20"
+                        alternateRowColors="true"
+                        sticky="ColumnHeaders"
+                        class="mwTabelaChamados sapUiTinyMarginBottom">
+                        <noData>
+                            <IllustratedMessage
+                                illustrationType="sapIllus-NoEntries"
+                                illustrationSize="Small"
+                                title="{i18n>ticketsNoData}"
+                                description="{i18n>ticketsNoDataDesc}"/>
+                        </noData>
+                        <!-- caseNumber e subject vem do GET de detalhe; o cliente identifica de qual
+                             dos clientes do requisitante o caso saiu. -->
+                        <columns>
+                            <Column>
+                                <Text text="{i18n>ticketsColCorrelationId}"/>
+                            </Column>
+                            <Column>
+                                <Text text="{i18n>ticketsColCaseNumber}"/>
+                            </Column>
+                            <Column>
+                                <Text text="{i18n>ticketsColSubject}"/>
+                            </Column>
+                            <Column
+                                minScreenWidth="Tablet"
+                                demandPopin="true"
+                                popinDisplay="Inline">
+                                <Text text="{i18n>ticketsColCustomerNumber}"/>
+                            </Column>
+                        </columns>
+                        <items>
+                            <!-- Navegavel: onTicketPressSap abre o caso da ALM pelo correlationId da linha. -->
+                            <ColumnListItem
+                                type="Navigation"
+                                vAlign="Middle"
+                                press=".onTicketPressSap">
+                                <cells>
+                                    <Text text="{tickets>correlationId}"/>
+                                    <ObjectIdentifier title="{tickets>caseNumber}"/>
+                                    <Text text="{tickets>subject}"/>
+                                    <Text text="{tickets>customerNumber}"/>
+                                </cells>
+                            </ColumnListItem>
+                        </items>
+                    </Table>
+                </VBox>
+            </f:content>
+        </f:Card>
+    </VBox>
+</core:FragmentDefinition>
