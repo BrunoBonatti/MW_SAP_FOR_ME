@@ -27,6 +27,7 @@
                 <ToggleButton
                     id="emailLocalButton"
                     icon="sap-icon://person-placeholder"
+                    text="{i18n>emailLocalTexto}"
                     type="Transparent"
                     pressed="true"
                     press=".onAlternarEmailLocal"
@@ -38,6 +39,7 @@
                 <ToggleButton
                     id="emailEdiButton"
                     icon="sap-icon://employee"
+                    text="{i18n>emailEdiTexto}"
                     type="Transparent"
                     press=".onAlternarEmailEdi"
                     tooltip="{i18n>emailEdiTooltip}">
@@ -56,6 +58,15 @@
                         <OverflowToolbarLayoutData priority="NeverOverflow" />
                     </layoutData>
                 </ToggleButton>
+                <!-- PROVISORIO: e-mail do botao ligado, no header em vez de MessageToast -->
+                <Text
+                    id="emailDevText"
+                    text="{view>/emailDev}"
+                    class="sapUiTinyMarginBegin sapUiTinyMarginEnd">
+                    <layoutData>
+                        <OverflowToolbarLayoutData priority="NeverOverflow" />
+                    </layoutData>
+                </Text>
                 <HBox class="mwNotificationBellWrap">
                     <layoutData>
                         <OverflowToolbarLayoutData closeOverflowOnInteraction="false" />

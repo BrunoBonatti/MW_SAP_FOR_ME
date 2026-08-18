@@ -3,8 +3,7 @@
     xmlns:core="sap.ui.core"
     xmlns:form="sap.ui.layout.form"
     core:require="{
-        fmt: 'megawork/mwmonitorchamados/model/formatter',
-        msg: 'sap/base/strings/formatMessage'
+        fmt: 'megawork/mwmonitorchamados/model/formatter'
     }">
     <!-- Fora do Main.view.xml de proposito: onDetalheAbrirChamadoSap instancia sob demanda com
          loadFragment (autoPrefixId, entao this.byId("dialogAbrirChamadoSap") continua achando). -->
@@ -89,18 +88,6 @@
             </Dialog>
         </dependents>
         <content>
-            <MessageStrip
-                class="sapUiSmallMargin"
-                type="Information"
-                showIcon="true"
-                text="{
-                    parts: [
-                        {path: 'i18n>abrirChamadoSapFaixa'},
-                        {path: 'chamadoSap>/origemId'},
-                        {path: 'chamadoSap>/origemTitulo'}
-                    ],
-                    formatter: 'msg'
-                }" />
             <form:SimpleForm
                 editable="true"
                 layout="ResponsiveGridLayout"
@@ -119,24 +106,35 @@
                 columnsL="1"
                 columnsM="1">
 
-                <!-- Somente leitura: valor ainda e fixo, editar nao mudaria o chamado no SAP. -->
-                <Label
-                    text="{i18n>abrirChamadoSapCliente}"
-                    labelFor="inputClienteChamadoSap" />
-                <Input
-                    id="inputClienteChamadoSap"
-                    value="{chamadoSap>/customerNome}"
-                    editable="false"
-                    width="100%" />
-
+                <!-- Numero e nome na mesma linha: os dois vem da mesma consulta pelo BuyerPartyID
+                     do chamado, e o nome sozinho nao identifica o cliente no SAP. -->
                 <Label
                     text="{i18n>abrirChamadoSapCustomerNbr}"
                     labelFor="inputCustomerNbrChamadoSap" />
-                <Input
-                    id="inputCustomerNbrChamadoSap"
-                    value="{chamadoSap>/customerNbr}"
-                    editable="false"
-                    width="12rem" />
+                <HBox width="100%" alignItems="Center">
+                    <Input
+                        id="inputCustomerNbrChamadoSap"
+                        value="{chamadoSap>/customerNbr}"
+                        placeholder="{i18n>abrirChamadoSapCustomerVazio}"
+                        editable="false"
+                        busy="{chamadoSap>/customerCarregando}"
+                        busyIndicatorDelay="0"
+                        width="12rem">
+                        <layoutData>
+                            <FlexItemData shrinkFactor="0" growFactor="0" />
+                        </layoutData>
+                    </Input>
+                    <!-- Falha de integracao nao pode virar "nao encontrado": acusaria o cadastro
+                         do cliente por uma queda do backend. -->
+                    <ObjectStatus
+                        class="sapUiTinyMarginBegin"
+                        text="{= ${chamadoSap>/customerCarregando} ? ${i18n>abrirChamadoSapCustomerCarregando} : (${chamadoSap>/customerNome} || (${chamadoSap>/customerFalha} ? ${i18n>abrirChamadoSapCustomerErro} : ${i18n>abrirChamadoSapCustomerNaoEncontrado})) }"
+                        state="None">
+                        <layoutData>
+                            <FlexItemData shrinkFactor="1" growFactor="1" />
+                        </layoutData>
+                    </ObjectStatus>
+                </HBox>
 
                 <!-- Somente leitura: editar criaria divergencia com o cadastro do SAP Cloud ALM. -->
                 <Label
@@ -205,10 +203,10 @@
                     valueLiveUpdate="true"
                     width="100%" />
 
-                <!-- Reaproveita o dialogComponentesSap do wizard; so o modelo de destino muda
-                     (ver _sModeloComponenteSap no Main.controller.js). -->
+                <!-- Reaproveita o dialogComponentesSap do wizard; muda so o modelo de destino (_sModeloComponenteSap). -->
                 <Label
-                    text="{i18n>criarChamadoComponenteSap}"
+                    text="{i18n>abrirChamadoSapComponente}"
+                    required="true"
                     labelFor="btnComponentesChamadoSap" />
                 <HBox width="100%">
                     <Button
@@ -216,7 +214,7 @@
                         text="{
                             parts: [
                                 {path: 'chamadoSap>/componenteSap'},
-                                {path: 'i18n>criarChamadoComponentesSapBotao'}
+                                {path: 'i18n>abrirChamadoSapComponenteBotao'}
                             ],
                             formatter: 'fmt.componenteSapResumo'
                         }"
@@ -231,7 +229,7 @@
                         visible="{= !!${chamadoSap>/componenteSap} }"
                         icon="sap-icon://decline"
                         type="Transparent"
-                        tooltip="{i18n>criarChamadoComponentesSapLimpar}"
+                        tooltip="{i18n>abrirChamadoSapComponenteLimpar}"
                         press=".onLimparComponenteChamadoSap">
                         <layoutData>
                             <FlexItemData shrinkFactor="0" growFactor="0" />
@@ -241,6 +239,7 @@
 
                 <Label
                     text="{i18n>abrirChamadoSapAmbiente}"
+                    required="true"
                     labelFor="btnAmbientesSap" />
                 <HBox width="100%">
                     <Button
@@ -254,6 +253,7 @@
                         }"
                         icon="sap-icon://search"
                         press=".onAbrirAmbientesSap"
+                        enabled="{= !${chamadoSap>/customerCarregando} }"
                         width="100%">
                         <layoutData>
                             <FlexItemData shrinkFactor="0" growFactor="1" />
@@ -273,6 +273,7 @@
 
                 <Label
                     text="{i18n>abrirChamadoSapPrioridade}"
+                    required="true"
                     labelFor="selectPrioridadeChamadoSap" />
                 <Select
                     id="selectPrioridadeChamadoSap"
@@ -298,16 +299,22 @@
             </form:SimpleForm>
         </content>
         <beginButton>
+            <!-- Bloqueado durante o envio: o POST nao tem deduplicacao e o segundo clique criaria
+                 um segundo caso REAL na SAP. -->
             <Button
                 id="btnConfirmarChamadoSap"
                 type="Emphasized"
                 icon="sap-icon://paper-plane"
                 text="{i18n>abrirChamadoSapConfirmar}"
+                enabled="{= !${chamadoSap>/enviando} }"
                 press=".onConfirmarChamadoSap" />
         </beginButton>
         <endButton>
+            <!-- Bloqueado durante o envio: fechar no meio nao cancela o POST, so esconderia do
+                 usuario que um caso real estava sendo criado na SAP. -->
             <Button
                 text="{i18n>abrirChamadoSapCancelar}"
+                enabled="{= !${chamadoSap>/enviando} }"
                 press=".onFecharAbrirChamadoSap" />
         </endButton>
     </Dialog>

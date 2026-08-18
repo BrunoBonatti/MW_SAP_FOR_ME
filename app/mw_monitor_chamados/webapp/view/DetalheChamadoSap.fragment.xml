@@ -2,28 +2,20 @@
     xmlns="sap.m"
     xmlns:core="sap.ui.core"
     xmlns:f="sap.f"
-    xmlns:suite="sap.suite.ui.commons"
-    xmlns:cards="sap.f.cards"
     xmlns:layout="sap.ui.layout"
-    xmlns:u="sap.ui.unified"
     core:require="{formatter: 'megawork/mwmonitorchamados/model/formatter'}">
-    <!-- Copia de DetalheChamado.fragment.xml para o fluxo "Acompanhar chamados SAP". Os handlers
-         sao OS MESMOS do detalhe original: eles resolvem a pagina em que mexem pelo sufixo
-         _sSufixoDetalhe do Main.controller.js, que _abrirDetalheDoChamado grava ao navegar. Por
-         isso os ids daqui sao os do original + "Sap" (detalheRefreshButtonSap etc.) - mudar um id
-         aqui exige mudar o _idDetalhe correspondente no controller. -->
+    <!-- So o modelo casoSap: sem bindElement em tickets, handler do detalhe C4C aqui quebraria. -->
     <f:DynamicPage
         id="detalheDynamicPageSap"
+        busy="{casoSap>/carregando}"
+        busyIndicatorDelay="0"
         headerExpanded="{view>/detalheHeaderExpandido}"
         preserveHeaderStateOnScroll="{view>/detalheEdicao}"
         toggleHeaderOnTitleClick="{= !${view>/detalheEdicao} }"
         class="sapUiResponsivePadding--title sapUiResponsivePadding--header sapUiResponsivePadding--content">
         <f:title>
             <f:DynamicPageTitle areaShrinkRatio="2.2:1:0.1">
-                <!-- O Breadcrumbs vive DENTRO do heading, e nao na aggregation <f:breadcrumbs>
-                     do DynamicPageTitle, para o botao de voltar poder ficar ao lado dele: aquela
-                     aggregation e tipada como sap.m.IBreadcrumbs e so aceita um Breadcrumbs, nao
-                     um HBox. Mesmo arranjo da linha WZv1. -->
+                <!-- Breadcrumbs no heading, e nao em f:breadcrumbs, para caber o voltar ao lado. -->
                 <f:heading>
                     <VBox>
                         <HBox
@@ -32,15 +24,15 @@
                             <Button
                                 icon="sap-icon://nav-back"
                                 type="Transparent"
-                                tooltip="{i18n>detalheVoltar}"
+                                tooltip="{i18n>detalheSapVoltar}"
                                 press=".onDetalheVoltar"
                                 class="mwDetalheVoltarBotao sapUiTinyMarginEnd"/>
                             <Breadcrumbs
-                                currentLocationText="{tickets>ID}"
+                                currentLocationText="{casoSap>/caso/caseNumber}"
                                 class="sapUiSmallMarginTop">
                                 <Link
-                                    text="{i18n>detalheBreadcrumbChamados}"
-                                    tooltip="{i18n>detalheVoltar}"
+                                    text="{i18n>detalheSapBreadcrumbCasos}"
+                                    tooltip="{i18n>detalheSapVoltar}"
                                     press=".onDetalheVoltar"/>
                             </Breadcrumbs>
                         </HBox>
@@ -49,57 +41,58 @@
                             wrap="Wrap"
                             class="sapUiTinyMarginBottom">
                             <Avatar
-                                src="sap-icon://document-text"
+                                src="sap-icon://sap-logo-shape"
                                 displayShape="Square"
                                 displaySize="L"
                                 backgroundColor="Accent6"
                                 class="sapUiMediumMarginEnd sapUiTinyMarginBottom"/>
                             <VBox class="sapUiTinyMarginBottom">
                                 <Title
-                                    text="{tickets>titulo}"
+                                    text="{casoSap>/caso/subject}"
                                     level="H2"
                                     wrapping="true"/>
-                                <!-- Status (campo Z), Prioridade e Tipo, nesta ordem a pedido do usuario.
-                                     O tag do Tipo se repete em AcompanharChamados: mudar nos dois. -->
+                                <!-- state="None" nos tres: status/prioridade/produto da ALM sao texto
+                                     livre, sem mapa de cor no formatter.js. -->
                                 <HBox
                                     wrap="Wrap"
                                     alignItems="Center"
                                     class="sapUiTinyMarginTop">
                                     <ObjectStatus
                                         inverted="true"
-                                        text="{tickets>statusTexto}"
-                                        state="{path: 'tickets>status', formatter: 'formatter.statusState'}"
-                                        icon="{path: 'tickets>status', formatter: 'formatter.statusIcone'}"
+                                        state="None"
+                                        visible="{= !!${casoSap>/caso/status} }"
+                                        text="{casoSap>/caso/status}"
+                                        tooltip="{i18n>detalheSapStatus}"
+                                        icon="sap-icon://process"
                                         class="sapUiTinyMarginEnd sapUiTinyMarginBottom"/>
                                     <ObjectStatus
                                         inverted="true"
-                                        text="{tickets>prioridadeTexto}"
-                                        state="{path: 'tickets>prioridade', formatter: 'formatter.prioridadeState'}"
-                                        icon="{path: 'tickets>prioridade', formatter: 'formatter.prioridadeIcone'}"
+                                        state="None"
+                                        visible="{= !!${casoSap>/caso/priority} }"
+                                        text="{casoSap>/caso/priority}"
+                                        tooltip="{i18n>detalheSapPrioridade}"
+                                        icon="sap-icon://priority"
                                         class="sapUiTinyMarginEnd sapUiTinyMarginBottom"/>
                                     <ObjectStatus
                                         inverted="true"
-                                        text="{tickets>tipo}"
-                                        state="{path: 'tickets>tipo', formatter: 'formatter.tipoState'}"
-                                        icon="sap-icon://tag"
+                                        state="None"
+                                        visible="{= !!${casoSap>/caso/product} }"
+                                        text="{casoSap>/caso/product}"
+                                        tooltip="{i18n>detalheSapProduto}"
+                                        icon="sap-icon://product"
                                         class="sapUiTinyMarginBottom"/>
                                 </HBox>
                             </VBox>
                         </HBox>
                     </VBox>
                 </f:heading>
-                <!-- Recarrega campos + chat + historico + anexos do chamado aberto.
-                     O id detalheRefreshButtonSap e load-bearing: onDetalheAtualizar faz
-                     byId("detalheRefreshButton").setBusy(true/false).
-                     Tooltip literal "Atualizar" por consistencia com o cockpitRefreshButton
-                     do Main.view.xml (nenhum dos dois usa i18n). -->
                 <f:actions>
                     <Button
                         id="detalheRefreshButtonSap"
                         icon="sap-icon://refresh"
                         type="Transparent"
-                        tooltip="Atualizar"
-                        press=".onDetalheAtualizar"/>
+                        tooltip="{i18n>detalheSapAtualizar}"
+                        press=".onDetalheSapAtualizar"/>
                 </f:actions>
                 <f:expandedContent>
                     <HBox
@@ -108,69 +101,82 @@
                         alignItems="Start"
                         wrap="Wrap"
                         class="sapUiMediumMarginTop">
+                        <!-- Visible na faceta inteira: no valor sozinho sobraria rotulo orfao. -->
                         <VBox
                             width="12rem"
+                            visible="{= !!${casoSap>/caso/createdAt} }"
                             class="sapUiTinyMarginBottom sapUiSmallMarginEnd">
                             <Label
-                                text="{i18n>detalheAbertoEm}"
+                                text="{i18n>detalheSapAbertoEm}"
                                 class="mwFacetaRotulo sapUiTinyMarginBottom"/>
                             <ObjectStatus
-                                text="{path: 'tickets>dataAbertura', formatter: 'formatter.dataAbertura'}"
+                                text="{path: 'casoSap>/caso/createdAt', formatter: 'formatter.dataAbertura'}"
                                 icon="sap-icon://calendar"
                                 state="None"
                                 class="mwFacetaValor"/>
                         </VBox>
                         <VBox
                             width="12rem"
+                            visible="{= !!${casoSap>/caso/updatedAt} }"
                             class="sapUiTinyMarginBottom sapUiSmallMarginEnd">
                             <Label
-                                text="{i18n>detalheResponsavel}"
+                                text="{i18n>detalheSapAtualizadoEm}"
                                 class="mwFacetaRotulo sapUiTinyMarginBottom"/>
                             <ObjectStatus
-                                text="{tickets>buyerMainContactPartyName}"
-                                icon="sap-icon://employee"
+                                text="{path: 'casoSap>/caso/updatedAt', formatter: 'formatter.dataAbertura'}"
+                                icon="sap-icon://calendar"
                                 state="None"
                                 class="mwFacetaValor"/>
                         </VBox>
                         <VBox
                             width="12rem"
+                            visible="{= !!${casoSap>/caso/closedAt} }"
                             class="sapUiTinyMarginBottom sapUiSmallMarginEnd">
                             <Label
-                                text="Empresa"
+                                text="{i18n>detalheSapEncerradoEm}"
                                 class="mwFacetaRotulo sapUiTinyMarginBottom"/>
                             <ObjectStatus
-                                text="{tickets>cliente}"
+                                text="{path: 'casoSap>/caso/closedAt', formatter: 'formatter.dataAbertura'}"
+                                icon="sap-icon://locked"
+                                state="None"
+                                class="mwFacetaValor"/>
+                        </VBox>
+                        <VBox
+                            width="12rem"
+                            visible="{= !!${casoSap>/caso/customer} }"
+                            class="sapUiTinyMarginBottom sapUiSmallMarginEnd">
+                            <Label
+                                text="{i18n>detalheSapCliente}"
+                                class="mwFacetaRotulo sapUiTinyMarginBottom"/>
+                            <ObjectStatus
+                                text="{casoSap>/caso/customer}"
                                 icon="sap-icon://building"
                                 state="None"
                                 class="mwFacetaValor"/>
                         </VBox>
                         <VBox
                             width="12rem"
+                            visible="{= !!${casoSap>/caso/systemName} }"
                             class="sapUiTinyMarginBottom sapUiSmallMarginEnd">
                             <Label
-                                text="Responsável"
+                                text="{i18n>detalheSapSistema}"
                                 class="mwFacetaRotulo sapUiTinyMarginBottom"/>
                             <ObjectStatus
-                                text="{
-                                    parts: [
-                                        {path: 'tickets>responsavelId'},
-                                        {path: 'i18n>detalheNaoAtribuido'}
-                                    ],
-                                    formatter: 'formatter.responsavelTexto'
-                                }"
-                                icon="sap-icon://employee"
+                                text="{casoSap>/caso/systemName}"
+                                icon="sap-icon://it-system"
                                 state="None"
                                 class="mwFacetaValor"/>
                         </VBox>
                         <VBox
                             width="12rem"
+                            visible="{= !!${casoSap>/caso/reporter} }"
                             class="sapUiTinyMarginBottom">
                             <Label
-                                text="{i18n>detalheResolvidoEm}"
+                                text="{i18n>detalheSapRequisitante}"
                                 class="mwFacetaRotulo sapUiTinyMarginBottom"/>
                             <ObjectStatus
-                                text="{path: 'tickets>requestFinisheddatetimeContent', formatter: 'formatter.dataAbertura'}"
-                                icon="sap-icon://calendar"
+                                text="{casoSap>/caso/reporter}"
+                                icon="sap-icon://employee"
                                 state="None"
                                 class="mwFacetaValor"/>
                         </VBox>
@@ -181,10 +187,10 @@
         <f:header>
             <f:DynamicPageHeader pinnable="false">
                 <MessageStrip
-                    visible="{view>/detalheEdicao}"
-                    type="Information"
+                    visible="{casoSap>/falha}"
+                    type="Error"
                     showIcon="true"
-                    text="{i18n>detalheEdicaoFaixa}"
+                    text="{i18n>detalheSapErroCarregar}"
                     class="sapUiSmallMarginBottom"/>
             </f:DynamicPageHeader>
         </f:header>
@@ -206,37 +212,36 @@
                                     alignItems="Center"
                                     class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop sapUiTinyMarginBottom">
                                     <core:Icon
-                                        src="sap-icon://action-settings"
+                                        src="sap-icon://document-text"
                                         size="1.5rem"
                                         class="sapUiSmallMarginEnd"/>
                                     <Title
-                                        text="Ações rápidas"
+                                        text="{i18n>detalheSapDescricao}"
                                         titleStyle="H5"/>
                                 </HBox>
-                                <VBox
-                                    width="100%"
-                                    alignItems="Center"
-                                    class="sapUiTinyMarginTop sapUiTinyMarginBottom">
-                                    <Button
-                                        width="14rem"
-                                        text="Finalizar chamado"
-                                        icon="sap-icon://complete"
-                                        type="Accept"
-                                        press=".onDetalheFinalizarChamado"
-                                        enabled="{= !formatter.chamadoEncerrado(${tickets>status}) }"
-                                        class="sapUiTinyMarginBottom"/>
-                                    <Button
-                                        width="14rem"
-                                        text="Cancelar chamado"
-                                        icon="sap-icon://decline"
-                                        type="Reject"
-                                        press=".onDetalheCancelarChamado"
-                                        enabled="{= !formatter.chamadoEncerrado(${tickets>status}) }"/>
+                                <!-- SEM width="100%": com as margens de 1rem a caixa estouraria o
+                                     .sapFCardContent (overflow hidden), como nos cartoes do detalhe C4C. -->
+                                <VBox class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop sapUiSmallMarginBottom">
+                                    <!-- FormattedText porque o payload traz <br/> e <p>; Text mostraria as tags. -->
+                                    <FormattedText
+                                        width="100%"
+                                        visible="{= !!${casoSap>/caso/description} }"
+                                        htmlText="{casoSap>/caso/description}"
+                                        class="mwTextoCorrido"/>
+                                    <!-- So com caso lido: carregando/falha nao tem descricao vazia. -->
+                                    <Text
+                                        visible="{= !!${casoSap>/caso} &amp;&amp; !${casoSap>/caso/description} }"
+                                        text="{i18n>detalheSapDescricaoVazia}"
+                                        class="mwTextoCorrido"/>
                                 </VBox>
                             </VBox>
                         </f:content>
                     </f:Card>
-                    <f:Card width="100%" class="sapUiSmallMarginBottom">
+                    <!-- Cartao inteiro escondido sem impacto informado: so o titulo nao diz nada. -->
+                    <f:Card
+                        width="100%"
+                        visible="{= !!${casoSap>/caso/businessImpact} }"
+                        class="sapUiSmallMarginBottom">
                         <f:content>
                             <VBox width="100%">
                                 <HBox
@@ -244,139 +249,27 @@
                                     alignItems="Center"
                                     class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop sapUiTinyMarginBottom">
                                     <core:Icon
-                                        src="sap-icon://document-text"
+                                        src="sap-icon://business-objects-experience"
                                         size="1.5rem"
                                         class="sapUiSmallMarginEnd"/>
                                     <Title
-                                        text="{i18n>detalheAbaDescricao}"
+                                        text="{i18n>detalheSapImpacto}"
                                         titleStyle="H5"/>
                                 </HBox>
-                                <VBox
-                                    width="100%"
-                                    class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop sapUiSmallMarginBottom">
-                                    <Text
-                                        renderWhitespace="true"
-                                        class="mwTextoCorrido"
-                                        text="{
-                                            parts: [
-                                                {path: 'tickets>descricao'},
-                                                {path: 'i18n>detalheDescricaoVazia'}
-                                            ],
-                                            formatter: 'formatter.textoOuTraco'
-                                        }"/>
-                                </VBox>
-                            </VBox>
-                        </f:content>
-                    </f:Card>
-                    <f:Card width="100%" class="sapUiSmallMarginBottom">
-                        <f:content>
-                            <VBox width="100%">
-                                <!-- SEM width="100%" de proposito: com width="100%" MAIS
-                                     sapUiSmallMarginBegin/End (margin 1rem !important cada) a
-                                     caixa pede 100% + 2rem dentro de 100%, desliza 1rem para a
-                                     direita e a borda direita cai FORA do .sapFCardContent, que o
-                                     Horizon deixa com overflow: hidden e sem padding proprio - o
-                                     retangulo de corte encosta na borda interna do cartao. Como o
-                                     SpaceBetween cola o uploader nessa borda, era o "+" que era
-                                     cortado. Sem width, o alignItems Stretch default do VBox pai
-                                     resolve a largura como 100% MENOS as margens, que voltam a ser
-                                     recuo de verdade. Classe interna do tema. -->
-                                <HBox
-                                    justifyContent="SpaceBetween"
-                                    alignItems="Center"
-                                    class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop sapUiTinyMarginBottom">
-                                    <HBox alignItems="Center">
-                                        <core:Icon
-                                            src="sap-icon://attachment"
-                                            size="1.5rem"
-                                            class="sapUiSmallMarginEnd"/>
-                                        <Title
-                                            text="{i18n>detalheAbaAnexos}"
-                                            titleStyle="H5"/>
-                                    </HBox>
-                                    <!-- multiple + sameFilenameAllowed: sem o segundo, o
-                                         FileUploader ignora a reselecao do mesmo arquivo
-                                         depois de um setValue(""). Extensao e tamanho ficam
-                                         fora do controle (sem fileType/maximumFileSize) e vao
-                                         no controller, arquivo por arquivo: o controle reprova
-                                         a selecao inteira no primeiro ofensor e engole o
-                                         change, levando os arquivos validos com ele. -->
-                                    <u:FileUploader
-                                        id="fileUploaderAnexoDetalheSap"
-                                        name="anexoChamadoDetalheSap"
-                                        class="mwUploaderBotao"
-                                        buttonOnly="true"
-                                        icon="sap-icon://add"
-                                        iconOnly="true"
-                                        tooltip="{i18n>detalheAnexoAdicionar}"
-                                        multiple="true"
-                                        sameFilenameAllowed="true"
-                                        enabled="{= !formatter.chamadoEncerrado(${tickets>status}) &amp;&amp; ${tickets>anexosEnviando} !== true }"
-                                        change=".onDetalheAnexoAdicionar">
-                                        <u:layoutData>
-                                            <FlexItemData shrinkFactor="0"/>
-                                        </u:layoutData>
-                                    </u:FileUploader>
-                                </HBox>
-                                <VBox
-                                    width="100%"
-                                    class="sapUiTinyMarginTop sapUiTinyMarginBottom">
-                                    <List
-                                        items="{tickets>anexos}"
-                                        busy="{= ${tickets>anexosCarregando} === true }"
-                                        busyIndicatorDelay="0"
-                                        showSeparators="Inner">
-                                        <noData>
-                                            <IllustratedMessage
-                                                illustrationType="sapIllus-NoData"
-                                                illustrationSize="ExtraSmall"
-                                                title="{i18n>detalheAnexosVazio}"
-                                                description="{i18n>detalheAnexosVazioDesc}"/>
-                                        </noData>
-                                        <CustomListItem
-                                            type="Active"
-                                            press=".onDetalheAnexoPress"
-                                            busy="{= ${tickets>baixando} === true || ${tickets>enviando} === true }"
-                                            busyIndicatorDelay="0">
-                                            <HBox
-                                                width="100%"
-                                                alignItems="Center"
-                                                justifyContent="SpaceBetween"
-                                                class="sapUiSmallMargin">
-                                                <HBox alignItems="Center">
-                                                    <Avatar
-                                                        displayShape="Square"
-                                                        displaySize="S"
-                                                        src="{path: 'tickets>nome', formatter: 'formatter.anexoIcone'}"/>
-                                                    <VBox class="sapUiSmallMarginBegin">
-                                                        <Title
-                                                            titleStyle="H6"
-                                                            text="{tickets>nome}"/>
-                                                        <Text
-                                                            text="{
-                                                                parts: [
-                                                                    {path: 'tickets>tamanho'},
-                                                                    {path: 'tickets>quando'},
-                                                                    {path: 'tickets>autor'}
-                                                                ],
-                                                                formatter: 'formatter.anexoLegenda'
-                                                            }"
-                                                            class="mwLegenda"/>
-                                                    </VBox>
-                                                </HBox>
-                                                <core:Icon
-                                                    src="sap-icon://download"
-                                                    decorative="false"
-                                                    tooltip="{tickets>nome}"/>
-                                            </HBox>
-                                        </CustomListItem>
-                                    </List>
+                                <VBox class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop sapUiSmallMarginBottom">
+                                    <FormattedText
+                                        width="100%"
+                                        htmlText="{casoSap>/caso/businessImpact}"
+                                        class="mwTextoCorrido"/>
                                 </VBox>
                             </VBox>
                         </f:content>
                     </f:Card>
                 </VBox>
+                <!-- Cartao central e nao mais um item da coluna: mesma grade do detalhe C4C,
+                     onde o chat e a metade do meio ladeada por duas colunas estreitas. -->
                 <f:Card width="100%" class="sapUiSmallMarginBottom">
+                    <!-- f:layoutData: sem o namespace do pai o parser le a tag como filho direto. -->
                     <f:layoutData>
                         <layout:GridData span="XL6 L6 M12 S12"/>
                     </f:layoutData>
@@ -384,51 +277,65 @@
                         <VBox width="100%">
                             <HBox
                                 width="100%"
-                                justifyContent="Start"
                                 alignItems="Center"
-                                class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop">
-                                <HBox alignItems="Center">
-                                    <core:Icon
-                                        src="sap-icon://discussion"
-                                        size="1.5rem"
-                                        class="sapUiSmallMarginEnd"/>
-                                    <VBox>
-                                        <Title
-                                            text="{i18n>detalheAbaChat}"
-                                            titleStyle="H5"/>
-                                    </VBox>
-                                </HBox>
+                                class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop sapUiTinyMarginBottom">
+                                <core:Icon
+                                    src="sap-icon://discussion"
+                                    size="1.5rem"
+                                    class="sapUiSmallMarginEnd"/>
+                                <Title
+                                    text="{i18n>detalheSapChat}"
+                                    titleStyle="H5"/>
                             </HBox>
-                            <VBox
-                                width="100%"
-                                class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop">
+                            <!-- SEM width="100%": mesmo estouro do cartao de Descricao. -->
+                            <VBox class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop sapUiSmallMarginBottom">
+                                <!-- Erro no cartao, nao por toast: falha junto com a
+                                     dos campos empilharia dois avisos iguais. -->
+                                <MessageStrip
+                                    visible="{casoSap>/chatFalha}"
+                                    type="Error"
+                                    showIcon="true"
+                                    text="{i18n>chatsSapErroCarregarComentarios}"
+                                    class="sapUiTinyMarginBottom"/>
+                                <!-- 20rem fixos: solta, a List cresceria com a conversa
+                                     e empurraria o campo de escrita para fora da dobra. -->
+                                <!-- Id com sufixo Sap (namespace unico da Main.view):
+                                     o controller rola ate a ultima bolha. -->
                                 <ScrollContainer
-    width="100%"
-    height="20rem"
-    vertical="true"
-    horizontal="false"
-    focusable="false">
+                                    id="detalheChatScrollSap"
+                                    width="100%"
+                                    height="20rem"
+                                    vertical="true"
+                                    horizontal="false"
+                                    focusable="false">
                                     <List
-                                        items="{tickets>chat}"
-                                        busy="{= ${tickets>chatCarregando} === true }"
+                                        items="{casoSap>/chat}"
+                                        busy="{= ${casoSap>/chatCarregando} === true }"
                                         busyIndicatorDelay="0"
                                         showSeparators="None">
                                         <noData>
+                                            <!-- Some na falha: "Nenhum comentario" por cima
+                                                 do erro afirmaria o que ninguem leu. -->
                                             <IllustratedMessage
+                                                visible="{= ${casoSap>/chatFalha} !== true }"
                                                 illustrationType="sapIllus-NoMail"
                                                 illustrationSize="Small"
-                                                title="{i18n>detalheChatVazio}"
-                                                description="{i18n>detalheChatVazioDesc}"/>
+                                                title="{i18n>chatsSapSemMensagens}"
+                                                description="{i18n>chatsSapSemMensagensDesc}"/>
                                         </noData>
                                         <CustomListItem>
+                                            <!-- Dois HBox exclusivos por ${casoSap>eu}: a ordem
+                                                 dos filhos muda, nao so o alinhamento. -->
                                             <VBox width="100%">
                                                 <HBox
-                                                    visible="{= ${tickets>eu} !== true }"
+                                                    visible="{= ${casoSap>eu} !== true }"
                                                     width="100%"
                                                     alignItems="Start"
                                                     justifyContent="Start"
                                                     wrap="NoWrap"
                                                     class="mwChatLinha sapUiTinyMarginTopBottom">
+                                                    <!-- Espacador em VBox, nao classe de margem:
+                                                         so shrinkFactor 0 sobrevive ao aperto. -->
                                                     <VBox width="1rem">
                                                         <layoutData>
                                                             <FlexItemData
@@ -436,9 +343,11 @@
                                                                 shrinkFactor="0"/>
                                                         </layoutData>
                                                     </VBox>
+                                                    <!-- Fixo: a bolha do caso SAP nao tem o
+                                                         flag "sistema" do chat do C4C. -->
                                                     <Avatar
                                                         displaySize="S"
-                                                        src="{= ${tickets>sistema} ? 'sap-icon://settings' : 'sap-icon://customer' }">
+                                                        src="sap-icon://customer">
                                                         <layoutData>
                                                             <FlexItemData
                                                                 growFactor="0"
@@ -452,6 +361,8 @@
                                                                 shrinkFactor="0"/>
                                                         </layoutData>
                                                     </VBox>
+                                                    <!-- minWidth 0: sem ele uma palavra longa trava
+                                                         a bolha e o cartao corta a linha. -->
                                                     <VBox class="mwChatBolhaEntrada">
                                                         <layoutData>
                                                             <FlexItemData
@@ -461,23 +372,23 @@
                                                         </layoutData>
                                                         <Title
                                                             titleStyle="H6"
-                                                            text="{tickets>autor}"
+                                                            text="{casoSap>autor}"
                                                             wrapping="true"/>
                                                         <Text
-                                                            text="{tickets>texto}"
+                                                            text="{casoSap>texto}"
                                                             wrapping="true"
                                                             renderWhitespace="true"
                                                             class="mwChatTextoQuebra"/>
                                                         <Text
                                                             width="100%"
-                                                            text="{path: 'tickets>quando', formatter: 'formatter.dataAbertura'}"
+                                                            text="{path: 'casoSap>quando', formatter: 'formatter.dataAbertura'}"
                                                             wrapping="false"
                                                             textAlign="Begin"
                                                             class="mwLegenda"/>
                                                     </VBox>
                                                 </HBox>
                                                 <HBox
-                                                    visible="{= ${tickets>eu} === true }"
+                                                    visible="{= ${casoSap>eu} === true }"
                                                     width="100%"
                                                     alignItems="Start"
                                                     justifyContent="End"
@@ -495,17 +406,17 @@
                                                             justifyContent="End">
                                                             <Title
                                                                 titleStyle="H6"
-                                                                text="{tickets>autor}"
+                                                                text="{casoSap>autor}"
                                                                 wrapping="true"/>
                                                         </HBox>
                                                         <Text
-                                                            text="{tickets>texto}"
+                                                            text="{casoSap>texto}"
                                                             wrapping="true"
                                                             renderWhitespace="true"
                                                             class="mwChatTextoQuebra"/>
                                                         <Text
                                                             width="100%"
-                                                            text="{path: 'tickets>quando', formatter: 'formatter.dataAbertura'}"
+                                                            text="{path: 'casoSap>quando', formatter: 'formatter.dataAbertura'}"
                                                             wrapping="false"
                                                             textAlign="End"
                                                             class="mwLegenda"/>
@@ -526,6 +437,8 @@
                                                                 shrinkFactor="0"/>
                                                         </layoutData>
                                                     </Avatar>
+                                                    <!-- 3rem deste lado, contra 1rem da entrada: e
+                                                         aqui que cai a barra de rolagem. -->
                                                     <VBox width="3rem">
                                                         <layoutData>
                                                             <FlexItemData
@@ -538,14 +451,18 @@
                                         </CustomListItem>
                                     </List>
                                 </ScrollContainer>
-                                <!-- Chamado encerrado bloqueia so o envio: o enabled fica no
-                                     FeedInput para a leitura do historico continuar liberada. -->
+                                <!-- enabled cai no envio (POST da ALM sem deduplicacao) e na leitura
+                                     (releitura em voo apagaria a bolha ja confirmada). -->
+                                <!-- O id existe para o controller repor o texto quando o POST falha;
+                                     maxLength espelha o teto do backend, senao so a recusa o revela. -->
                                 <FeedInput
-                                    placeholder="{= formatter.chamadoEncerrado(${tickets>status}) ? ${i18n>detalheChatBloqueadoEncerrado} : ${i18n>detalheChatPlaceholder} }"
-                                    buttonTooltip="{i18n>detalheChatEnviar}"
+                                    id="detalheChatFeedInputSap"
+                                    placeholder="{i18n>detalheSapChatPlaceholder}"
+                                    buttonTooltip="{i18n>detalheSapChatEnviar}"
                                     icon="sap-icon://employee"
-                                    post=".onDetalheEnviarMensagem"
-                                    enabled="{= !formatter.chamadoEncerrado(${tickets>status}) }"
+                                    maxLength="5000"
+                                    post=".onDetalheSapEnviarMensagem"
+                                    enabled="{= ${casoSap>/chatEnviando} !== true &amp;&amp; ${casoSap>/chatCarregando} !== true &amp;&amp; !!${casoSap>/correlationId} }"
                                     class="sapUiSmallMarginTop"/>
                             </VBox>
                         </VBox>
@@ -558,47 +475,141 @@
                     <f:Card width="100%" class="sapUiSmallMarginBottom">
                         <f:content>
                             <VBox width="100%">
-                                <!-- SEM width="100%": mesma armadilha do cabecalho de Anexos - com
-                                     width + as margens de 1rem a caixa estoura 1rem para fora do
-                                     .sapFCardContent (overflow: hidden, sem padding) e o
-                                     SpaceBetween joga a contagem justamente nesse pedaco cortado. -->
                                 <HBox
-                                    justifyContent="SpaceBetween"
+                                    width="100%"
                                     alignItems="Center"
                                     class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop sapUiTinyMarginBottom">
-                                    <HBox alignItems="Center">
-                                        <core:Icon
-                                            src="sap-icon://history"
-                                            size="1.5rem"
-                                            class="sapUiSmallMarginEnd"/>
-                                        <Title
-                                            text="{i18n>detalheAtividadeRecente}"
-                                            titleStyle="H5"/>
-                                    </HBox>
-                                    <ObjectStatus
-                                        text="{path: 'tickets>historico', formatter: 'formatter.contagem'}"
-                                        state="None"/>
+                                    <core:Icon
+                                        src="sap-icon://technical-object"
+                                        size="1.5rem"
+                                        class="sapUiSmallMarginEnd"/>
+                                    <Title
+                                        text="{i18n>detalheSapDadosTecnicos}"
+                                        titleStyle="H5"/>
                                 </HBox>
-                                <VBox
-                                    width="100%"
-                                    class="sapUiTinyMarginTop sapUiSmallMarginBottom">
-                                    <suite:Timeline
-                                        id="idTimelineHistoricoSap"
-                                        alignment="Right"
-                                        busy="{= ${tickets>historicoCarregando} === true }"
-                                        busyIndicatorDelay="0"
-                                        sortOldestFirst="false"
-                                        showSearch="false"
-                                        showSort="false"
-                                        showItemFilter="false"
-                                        showHeaderBar="false"
-                                        content="{tickets>historico}">
-                                        <suite:TimelineItem
-                                            dateTime="{path: 'tickets>quando', formatter: 'formatter.dataAbertura'}"
-                                            title="{tickets>autor}"
-                                            text="{tickets>texto}"
-                                            icon="{path: 'tickets>sistema', formatter: 'formatter.historicoIcone'}"/>
-                                    </suite:Timeline>
+                                <VBox class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop sapUiSmallMarginBottom">
+                                    <VBox
+                                        visible="{= !!${casoSap>/caso/product} }"
+                                        class="sapUiTinyMarginBottom">
+                                        <Label
+                                            text="{i18n>detalheSapProduto}"
+                                            class="mwFacetaRotulo"/>
+                                        <Text
+                                            text="{casoSap>/caso/product}"
+                                            class="mwFacetaValor"/>
+                                    </VBox>
+                                    <VBox
+                                        visible="{= !!${casoSap>/caso/productFunction} }"
+                                        class="sapUiTinyMarginBottom">
+                                        <Label
+                                            text="{i18n>detalheSapFuncaoProduto}"
+                                            class="mwFacetaRotulo"/>
+                                        <Text
+                                            text="{casoSap>/caso/productFunction}"
+                                            class="mwFacetaValor"/>
+                                    </VBox>
+                                    <VBox
+                                        visible="{= !!${casoSap>/caso/customerNumber} }"
+                                        class="sapUiTinyMarginBottom">
+                                        <Label
+                                            text="{i18n>detalheSapNumeroCliente}"
+                                            class="mwFacetaRotulo"/>
+                                        <Text
+                                            text="{casoSap>/caso/customerNumber}"
+                                            class="mwFacetaValor"/>
+                                    </VBox>
+                                    <VBox
+                                        visible="{= !!${casoSap>/caso/installationNumber} }"
+                                        class="sapUiTinyMarginBottom">
+                                        <Label
+                                            text="{i18n>detalheSapInstalacao}"
+                                            class="mwFacetaRotulo"/>
+                                        <Text
+                                            text="{casoSap>/caso/installationNumber}"
+                                            class="mwFacetaValor"/>
+                                    </VBox>
+                                    <VBox
+                                        visible="{= !!${casoSap>/caso/systemName} }"
+                                        class="sapUiTinyMarginBottom">
+                                        <Label
+                                            text="{i18n>detalheSapSistema}"
+                                            class="mwFacetaRotulo"/>
+                                        <Text
+                                            text="{casoSap>/caso/systemName}"
+                                            class="mwFacetaValor"/>
+                                    </VBox>
+                                    <VBox
+                                        visible="{= !!${casoSap>/caso/systemId} }"
+                                        class="sapUiTinyMarginBottom">
+                                        <Label
+                                            text="{i18n>detalheSapSistemaId}"
+                                            class="mwFacetaRotulo"/>
+                                        <Text
+                                            text="{casoSap>/caso/systemId}"
+                                            class="mwFacetaValor"/>
+                                    </VBox>
+                                    <VBox
+                                        visible="{= !!${casoSap>/caso/systemNbr} }"
+                                        class="sapUiTinyMarginBottom">
+                                        <Label
+                                            text="{i18n>detalheSapSistemaNumero}"
+                                            class="mwFacetaRotulo"/>
+                                        <Text
+                                            text="{casoSap>/caso/systemNbr}"
+                                            class="mwFacetaValor"/>
+                                    </VBox>
+                                    <VBox
+                                        visible="{= !!${casoSap>/caso/language} }"
+                                        class="sapUiTinyMarginBottom">
+                                        <Label
+                                            text="{i18n>detalheSapIdioma}"
+                                            class="mwFacetaRotulo"/>
+                                        <Text
+                                            text="{casoSap>/caso/language}"
+                                            class="mwFacetaValor"/>
+                                    </VBox>
+                                    <VBox
+                                        visible="{= !!${casoSap>/caso/supportType} }"
+                                        class="sapUiTinyMarginBottom">
+                                        <Label
+                                            text="{i18n>detalheSapTipoSuporte}"
+                                            class="mwFacetaRotulo"/>
+                                        <Text
+                                            text="{casoSap>/caso/supportType}"
+                                            class="mwFacetaValor"/>
+                                    </VBox>
+                                    <VBox
+                                        visible="{= !!${casoSap>/caso/createdBy} }"
+                                        class="sapUiTinyMarginBottom">
+                                        <Label
+                                            text="{i18n>detalheSapCriadoPor}"
+                                            class="mwFacetaRotulo"/>
+                                        <Text
+                                            text="{casoSap>/caso/createdBy}"
+                                            class="mwFacetaValor"/>
+                                    </VBox>
+                                    <VBox
+                                        visible="{= !!${casoSap>/caso/lastUpdatedBy} }"
+                                        class="sapUiTinyMarginBottom">
+                                        <Label
+                                            text="{i18n>detalheSapAtualizadoPor}"
+                                            class="mwFacetaRotulo"/>
+                                        <Text
+                                            text="{casoSap>/caso/lastUpdatedBy}"
+                                            class="mwFacetaValor"/>
+                                    </VBox>
+                                    <!-- Texto do i18n: a URL crua nao diz nada ao usuario. -->
+                                    <VBox visible="{= !!${casoSap>/caso/connectionLink} }">
+                                        <Label
+                                            text="{i18n>detalheSapLinkConexao}"
+                                            class="mwFacetaRotulo"/>
+                                        <Link
+                                            text="{i18n>detalheSapLinkConexaoTexto}"
+                                            href="{casoSap>/caso/connectionLink}"
+                                            tooltip="{casoSap>/caso/connectionLink}"
+                                            target="_blank"
+                                            class="mwFacetaValor"/>
+                                    </VBox>
                                 </VBox>
                             </VBox>
                         </f:content>

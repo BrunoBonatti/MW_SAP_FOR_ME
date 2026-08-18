@@ -19,6 +19,15 @@ sap.ui.define([
         BAIXA: "7"
     };
 
+    // Inverso do mapa acima: o dialogo SAP herda a prioridade do chamado que esta sendo escalado,
+    // porque nascer sempre em "Baixa" abriria o caso na SAP com o SLA errado desde a criacao.
+    const PRIORIDADE_CHAMADO_DO_C4C = {
+        1: "IMEDIATA",
+        2: "URGENTE",
+        3: "NORMAL",
+        7: "BAIXA"
+    };
+
     // Prioridade do chamado por pontuacao: o cliente marca opcoes (MultiComboBox) de "Ambiente/sistema
     // afetado" e "O que pode ser afetado" (codelists>/areasAfetadasChamado e
     // .../tiposImpactoChamado, cada opcao com um peso). A soma dos pesos marcados e enquadrada
@@ -175,10 +184,6 @@ sap.ui.define([
         componenteSap: null
     };
 
-    // PROVISORIO: aguardando integracao com a consulta de cliente.
-    const CUSTOMER_NBR_FIXO = "0002015672";
-    const CUSTOMER_NOME_FIXO = "ESGAS - COMPANHIA DE GAS DO ESPIRITO SANTO";
-
     const WIZARD_ID = "wizardCriarChamado";
     const PASSO_CLASSIFICACAO = 1;
     const PASSO_DETALHES = 2;
@@ -214,8 +219,8 @@ sap.ui.define([
         + "ServicePriorityCode,ServicePriorityCodeText,"
         + "ServiceRequestUserLifeCycleStatusCode,ServiceRequestUserLifeCycleStatusCodeText,"
         + "ServiceRequestLifeCycleStatusCode,ServiceRequestLifeCycleStatusCodeText,"
-        + "ProcessorPartyName,BuyerPartyName,BuyerMainContactPartyName,RequestFinisheddatetimeContent,"
-        + "CreationDateTime,ResolvedOnDateTime,BuyerMainContactPartyID";
+        + "ProcessorPartyName,BuyerPartyID,BuyerPartyName,BuyerMainContactPartyName,RequestFinisheddatetimeContent,"
+        + "CreationDateTime,ResolvedOnDateTime,BuyerMainContactPartyID,Z_COMPONENT_SFM_KUT";
 
     const oCockpitDateTimeFormat = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
 
@@ -223,6 +228,10 @@ sap.ui.define([
     // (aparece dentro da bolha como o "autor" das notas do DetalheChamado), nao rotulo de UI -
     // por isso nao vem do i18n.
     const AUTOR_MENSAGEM_PROPRIA = "Eu";
+
+    // Chat com SAP: ITSM_types.Comment.type do comentario escrito pelo CLIENTE (nos) para a SAP.
+    // Unico discriminador de direcao do endpoint - e por ele que a bolha vai para a direita.
+    const TIPO_COMENTARIO_CLIENTE_SAP = "Info for SAP";
 
     // As duas telas de acompanhamento ("Acompanhar chamados" e "Acompanhar chamados SAP") sao o
     // mesmo par de fragments duplicado, com os mesmos handlers: o sufixo abaixo e o que distingue
@@ -236,9 +245,10 @@ sap.ui.define([
         _bExpanded: true,
 
         // Sufixo da tela de detalhe aberta no momento ("" ou "Sap"). Gravado por
-        // _abrirDetalheDoChamado e lido por _idDetalhe: e o que faz os handlers do detalhe (chat,
-        // anexos, historico, acoes) mexerem na pagina certa, ja que os dois fragments do detalhe
-        // compartilham handler.
+        // _abrirDetalheDoChamado (C4C) e _abrirDetalheCasoSap (Cloud ALM) e lido por _idDetalhe: e o
+        // que faz a navegacao abrir a pagina de detalhe do fluxo e onDetalheVoltar voltar para a
+        // lista dele, e o que faz os handlers do detalhe C4C (chat, anexos, historico, acoes)
+        // mexerem na pagina certa.
         _sSufixoDetalhe: "",
 
         onInit() {
@@ -264,19 +274,25 @@ sap.ui.define([
                 // Alimenta o busy da List da conversa. Nasce false porque a List binda nele desde
                 // o primeiro render (binding em undefined nunca sai do estado ocupado).
                 chatCarregando: false,
-                // Modulo "Chat com SAP": continua mock (nao existe API de mensagens no SAP Cloud
-                // ALM hoje). Mesmo padrao acima, com sufixo Sap - as duas telas usam os mesmos
-                // handlers e PRECISAM de estado separado, senao selecionar uma conversa numa
-                // trocaria a conversa aberta na outra. _criarChatsMock devolve um array novo a
-                // cada chamada, entao as duas listas nao compartilham referencia.
-                chatListaSap: this._criarChatsMock(),
+                // Modulo "Chat com SAP": estado proprio com sufixo Sap porque os handlers sao os
+                // mesmos das duas telas - com as mesmas propriedades, selecionar uma conversa numa
+                // trocaria a conversa aberta na outra. Ao contrario de /chatLista, esta lista NAO e
+                // mock: nasce vazia e e preenchida por _espelharCasosSapNoChat quando a carga dos
+                // casos SAP termina.
+                chatListaSap: [],
                 chatSelecionadoSap: null,
                 chatMensagensSap: [],
                 chatCarregandoSap: false,
+                // Trava de envio da conversa SAP: sem chave de deduplicacao na ALM, dois cliques
+                // rapidos gravariam a mesma mensagem duas vezes no caso real. Nasce false porque o
+                // FeedInput binda nela desde o primeiro render.
+                chatEnviandoSap: false,
                 // Preenchido em _carregarRequisitante a partir de _sRequisitanteOrigem: controla
                 // a visibilidade da coluna Prioridade (Acompanhar Chamados/SAP) e a aba Criar
                 // chamado no menu lateral. Nasce false (mesma logica de podeVoltar/podeAvancar).
                 requisitanteEhFuncionario: false,
+                // PROVISORIO: e-mail do botao de homologacao ligado (o primeiro nasce pressed)
+                emailDev: EMAIL_LOCAL_DEV,
                 // Preenchidos por _montarChatLista via _verificarNotificacoesChats: contagem de
                 // chamados com mensagem nova (badge do sino) e a lista deles (popover do sino).
                 notificacoesTotal: 0,
@@ -312,7 +328,7 @@ sap.ui.define([
 
             this.getOwnerComponent().getModel("tickets").setProperty("/Tickets", []);
             // Lista do fluxo SAP (escopo por S-User): vazia pelo mesmo motivo de /Tickets.
-            this.getOwnerComponent().getModel("tickets").setProperty("/TicketsSap", []);
+            this._limparCasosSap();
 
             this._montarListasDeFiltro([]);
 
@@ -467,6 +483,8 @@ sap.ui.define([
         _selecionarEmailDev(sEmail) {
             this._sEmailDev = sEmail;
 
+            this.getView().getModel("view").setProperty("/emailDev", sEmail);
+
             const aBotoes = Object.keys(EMAILS_DEV_POR_BOTAO)
                 .map((sId) => ({ botao: this.byId(sId), email: EMAILS_DEV_POR_BOTAO[sId] }))
                 .filter((oItem) => oItem.botao);
@@ -476,9 +494,17 @@ sap.ui.define([
                 oItem.botao.setEnabled(false);
             }
 
-            // A lista inteira e recriada: o detalhe aberto esta preso a um indice ("/Tickets/3")
-            // que passaria a apontar para outro chamado.
-            this.byId("mainContents").to(this.createId("acompanharChamados"));
+            // Sair do detalhe: ele esta preso a um indice ("/Tickets/3") que passaria a apontar para
+            // outro chamado, e o sufixo pendurado levaria o voltar para a lista do fluxo anterior.
+            this._sSufixoDetalhe = "";
+            this._irParaHome();
+
+            // Igual ao onInit: se a carga do requisitante novo falhar, ninguem mais substitui o
+            // cockpit e as listas, e a Home ficaria com os chamados do anterior.
+            this.getOwnerComponent().getModel("tickets").setProperty("/Tickets", []);
+            this._montarListasDeFiltro([]);
+            this._limparCasosSap();
+            this._renderizarCockpit([]);
 
             // _carregarRequisitante trata o proprio erro (nunca rejeita), entao a cadeia segue e
             // os botoes sempre voltam a ficar clicaveis. Quando ele devolve false ja mostrou o
@@ -494,17 +520,26 @@ sap.ui.define([
                         this._carregarCockpit(),
                         // Novo usuario, novo S-User: sem isto a lista SAP fica a do anterior.
                         this._carregarChamadosSap()
-                    ])
-                        .then(() => {
-                            MessageToast.show(
-                                this._getResourceBundle().getText("emailLocalLigado", [sEmail]));
-                        });
+                    ]);
                 })
                 .finally(() => {
                     for (const oItem of aBotoes) {
                         oItem.botao.setEnabled(true);
                     }
                 });
+        },
+
+        _irParaHome() {
+            const oNavContainer = this.byId("mainContents");
+            const sIdHome = this.createId("home");
+
+            this.byId("sideNavigation").setSelectedKey("home");
+
+            // NavContainer enfileira o to() emitido durante outra transicao (nao descarta), entao
+            // nao ha retentativa a fazer; o if so evita o aviso de "navegar para a pagina atual".
+            if (oNavContainer.getCurrentPage()?.getId() !== sIdHome) {
+                oNavContainer.to(sIdHome);
+            }
         },
 
         onRefreshCockpit() {
@@ -535,9 +570,10 @@ sap.ui.define([
             }
         },
 
-        // Daqui até onTicketPressSap: handlers das DUAS telas de acompanhamento. Cada par
+        // Daqui até onRefreshTicketsSap: handlers das DUAS telas de acompanhamento. Cada par
         // on*/on*Sap so escolhe o sufixo e delega para a implementacao comum, que resolve os
-        // controles (id + sufixo) e o estado de filtro/ordem daquela tela.
+        // controles (id + sufixo) e o estado de filtro/ordem daquela tela. O clique na linha e a
+        // excecao: os dois detalhes vem de sistemas diferentes e nao compartilham implementacao.
         onSearchTickets(oEvent) {
             this._filtrarChamadosPorTexto(oEvent, "");
         },
@@ -677,8 +713,25 @@ sap.ui.define([
             this._abrirChamadoDaTabela(oEvent, "");
         },
 
+        // A linha SAP NAO passa por _abrirChamadoDaTabela: aquele fluxo binda a linha do modelo
+        // "tickets" na pagina de detalhe e dispara chat/historico/anexos do C4C. O caso do Cloud ALM
+        // e lido a parte, pelo correlationId da propria linha.
         onTicketPressSap(oEvent) {
-            this._abrirChamadoDaTabela(oEvent, "Sap");
+            const oContext = oEvent.getSource().getBindingContext("tickets");
+
+            if (!oContext) {
+                return;
+            }
+
+            const sCorrelationId = String(oContext.getObject()?.correlationId ?? "").trim();
+
+            // Sem correlationId o GET de detalhe sairia sem chave e traria caso de outro requisitante.
+            if (!sCorrelationId) {
+                MessageToast.show(this._getResourceBundle().getText("detalheSapSemCorrelationId"));
+                return;
+            }
+
+            this._abrirDetalheCasoSap(sCorrelationId);
         },
 
         _abrirChamadoDaTabela(oEvent, sSufixo) {
@@ -741,6 +794,200 @@ sap.ui.define([
             this._marcarChatVisualizado(String(oContext.getProperty("ID") ?? "").trim());
         },
 
+        // Detalhe do caso do Cloud ALM. Vive fora do modelo "tickets" (a linha da lista SAP so tem
+        // correlationId/caseNumber/subject/customerNumber) e por isso NAO reaproveita nada do
+        // detalhe C4C: o fragment SAP le tudo do modelo "casoSap".
+        _abrirDetalheCasoSap(sCorrelationId) {
+            // Antes de qualquer navegacao: _idDetalhe usa o sufixo para resolver a pagina do detalhe
+            // e, depois, a lista para onde onDetalheVoltar volta (acompanharChamadosSap).
+            this._sSufixoDetalhe = "Sap";
+
+            const oModelo = this._modeloCasoSap();
+
+            // O correlationId corrente e a chave da guarda de obsolescencia de _lerDetalheCasoSap.
+            oModelo.setProperty("/correlationId", sCorrelationId);
+            oModelo.setProperty("/caso", null);
+            oModelo.setProperty("/falha", false);
+            oModelo.setProperty("/carregando", true);
+
+            // Quem limpa a conversa e a abertura: onDetalheVoltar nao mexe no modelo casoSap, e o
+            // carregador nao limpa para o refresh do mesmo caso nao piscar vazio sob o busy.
+            oModelo.setProperty("/chat", []);
+            oModelo.setProperty("/chatFalha", false);
+            oModelo.setProperty("/chatCarregando", false);
+            // A trava do envio tambem: o modelo casoSap e memoizado (o literal com chatEnviando so
+            // roda na PRIMEIRA criacao) e o finally de onDetalheSapEnviarMensagem nao solta a trava
+            // de um caso que ja nao e o corrente. Sem este reset, sair do caso com o POST em voo
+            // deixaria o campo de mensagem desabilitado em todo caso aberto depois.
+            oModelo.setProperty("/chatEnviando", false);
+
+            // Toggle de e-mail dev pode trocar o requisitante enquanto o S-User viaja.
+            const iGeracao = this._iGeracaoRequisitante;
+
+            this._lerSUserRequisitante().then((oResultado) => {
+                // S-User do usuario anterior abriria o caso com o reporter errado.
+                if (iGeracao !== this._iGeracaoRequisitante) {
+                    oModelo.setProperty("/carregando", false);
+
+                    return;
+                }
+
+                const sSUser = String(oResultado?.sUser ?? "").trim();
+
+                // O GET da ALM exige reporter=<S-User>: sem ele nem vale navegar, a tela abriria
+                // vazia e sem chance de carregar.
+                if (!sSUser) {
+                    Log.warning("Detalhe do chamado SAP ignorado: requisitante sem S-User", null,
+                        "megawork.mwmonitorchamados.controller.Main");
+
+                    oModelo.setProperty("/carregando", false);
+                    MessageToast.show(this._getResourceBundle().getText("detalheSapSemSUser"));
+
+                    return;
+                }
+
+                // O fragment SAP binda nas mesmas propriedades compartilhadas do detalhe.
+                const oViewModel = this.getView().getModel("view");
+
+                oViewModel.setProperty("/detalheEdicao", false);
+                oViewModel.setProperty("/detalheHeaderExpandido", true);
+
+                this.byId("mainContents").to(this.createId(this._idDetalhe("detalheChamado")));
+                this.byId("sideNavigation")?.setSelectedKey(this._idDetalhe("acompanharChamados"));
+
+                // Depois do .to(): a tela abre ja ocupada e os campos chegam com a resposta.
+                this._lerDetalheCasoSap(sCorrelationId, sSUser);
+
+                // Chamada propria, e nao dentro da leitura dos campos: sao duas functions OData
+                // distintas (1 GET cada) e os campos nao podem esperar 200 comentarios.
+                this._carregarComentariosDoDetalheSap(sCorrelationId, sSUser);
+            });
+        },
+
+        // Criado na primeira abertura (mesmo padrao de _abrirComponentesSap/_abrirAmbientesSap). As
+        // flags nascem preenchidas porque o fragment binda nelas desde o primeiro render - busy em
+        // undefined nunca sairia do estado ocupado.
+        _modeloCasoSap() {
+            let oModelo = this.getView().getModel("casoSap");
+
+            if (!oModelo) {
+                oModelo = new JSONModel({
+                    carregando: false,
+                    falha: false,
+                    correlationId: "",
+                    caso: null,
+                    chat: [],
+                    chatCarregando: false,
+                    chatFalha: false,
+                    // Trava de envio: sem chave de deduplicacao na ALM, dois posts em sequencia
+                    // gravariam a mesma mensagem duas vezes no caso real.
+                    chatEnviando: false
+                });
+                this.getView().setModel(oModelo, "casoSap");
+            }
+
+            return oModelo;
+        },
+
+        // Falha nao abre MessageBox: a MessageStrip do proprio detalhe ja avisa e o resto da tela
+        // (voltar, refresh) segue util. Devolve se a leitura deu certo - o refresh usa para o toast.
+        _lerDetalheCasoSap(sCorrelationId, sSUser) {
+            const oModelo = this._modeloCasoSap();
+            let oOperation = null;
+
+            return Promise.resolve()
+                .then(() => {
+                    // $direct: no $batch $auto esta leitura ficaria atras da carga da lista.
+                    oOperation = this.getOwnerComponent().getModel()
+                        .bindContext("/DetalheCasoSap(...)", null, { $$groupId: "$direct" });
+                    oOperation.setParameter("correlationId", sCorrelationId);
+                    oOperation.setParameter("sUser", sSUser);
+
+                    return oOperation.invoke();
+                })
+                .then(() => oOperation.getBoundContext().requestObject())
+                .then((oCaso) => {
+                    // Resposta lenta de um caso ja abandonado sobrescreveria o caso aberto agora.
+                    if (oModelo.getProperty("/correlationId") !== sCorrelationId) {
+                        return false;
+                    }
+
+                    oModelo.setProperty("/caso", oCaso ?? null);
+                    oModelo.setProperty("/falha", false);
+
+                    return true;
+                })
+                .catch((oError) => {
+                    Log.error("Falha ao carregar o detalhe do chamado SAP", oError,
+                        "megawork.mwmonitorchamados.controller.Main");
+
+                    // Falha do caso abandonado acusaria erro na tela do caso que carregou bem.
+                    if (oModelo.getProperty("/correlationId") !== sCorrelationId) {
+                        return false;
+                    }
+
+                    MessageToast.show(this._getResourceBundle().getText("detalheSapErroCarregar"));
+
+                    oModelo.setProperty("/caso", null);
+                    oModelo.setProperty("/falha", true);
+
+                    return false;
+                })
+                .finally(() => {
+                    // Resposta obsoleta soltaria o busy da leitura do caso novo, ainda em voo.
+                    if (oModelo.getProperty("/correlationId") === sCorrelationId) {
+                        oModelo.setProperty("/carregando", false);
+                    }
+
+                    oOperation?.destroy();
+                });
+        },
+
+        // Refresh proprio: onDetalheAtualizar rele campos/chat/historico/anexos pelo binding context
+        // de "tickets", que o detalhe SAP nao tem. Id do botao fixo, sem _idDetalhe: este handler so
+        // existe no fragment SAP.
+        onDetalheSapAtualizar() {
+            const oButton = this.byId("detalheRefreshButtonSap");
+            const oModelo = this._modeloCasoSap();
+            const sCorrelationId = String(oModelo.getProperty("/correlationId") ?? "").trim();
+
+            oButton?.setBusyIndicatorDelay(0);
+            oButton?.setBusy(true);
+
+            if (!sCorrelationId) {
+                oButton?.setBusy(false);
+
+                return;
+            }
+
+            // S-User relido: o toggle de e-mail dev pode ter trocado o requisitante com o detalhe aberto.
+            this._lerSUserRequisitante()
+                .then((oResultado) => {
+                    const sSUser = String(oResultado?.sUser ?? "").trim();
+
+                    if (!sSUser) {
+                        MessageToast.show(this._getResourceBundle().getText("detalheSapSemSUser"));
+
+                        return false;
+                    }
+
+                    // Toast preso ao PRIMEIRO boolean (o dos campos), como no onDetalheAtualizar:
+                    // uma falha da conversa mentiria sobre o refresh do chamado.
+                    return Promise.all([
+                        this._lerDetalheCasoSap(sCorrelationId, sSUser),
+                        this._carregarComentariosDoDetalheSap(sCorrelationId, sSUser)
+                    ]).then(([bCampos]) => bCampos);
+                })
+                .then((bOk) => {
+                    if (bOk) {
+                        MessageToast.show(this._getResourceBundle().getText("detalheSapRefreshSucesso"));
+                    }
+                })
+                .finally(() => {
+                    oButton?.setBusy(false);
+                });
+        },
+
         // Clique num item da lista de recentes do cockpit. O item vem do modelo "view" (dados crus
         // do C4C, sem ObjectID e fora do modelo do detalhe), entao aqui a linha equivalente e
         // reencontrada em tickets>/Tickets pela ID antes de abrir o detalhe.
@@ -760,12 +1007,20 @@ sap.ui.define([
                 return;
             }
 
+            // Toggle de e-mail pode trocar o requisitante durante o GET.
+            const iGeracao = this._iGeracaoRequisitante;
+
             // O cockpit ordena por LastChangeDateTime e a aba por CreationDateTime (cortando em
             // MAX_TICKETS_LISTA): um chamado antigo com atualizacao recente pode estar na lista de
             // recentes sem estar em /Tickets. Recarregar a lista inteira NAO resolveria (mesma
             // query, mesmo corte) e ainda descartaria os caches de chat/historico das outras
             // linhas, entao busca-se o chamado pelo ID e insere-se so ele na lista.
             this._carregarChamadoPorId(oTicketsModel, sId).then((sPathNovo) => {
+                // Evita detalhe do requisitante anterior sobre a tela nova.
+                if (iGeracao !== this._iGeracaoRequisitante) {
+                    return;
+                }
+
                 if (sPathNovo) {
                     this._abrirDetalheDoChamado(oTicketsModel.getContext(sPathNovo));
                     return;
@@ -803,9 +1058,14 @@ sap.ui.define([
 
                 // No topo: a lista e ordenada por CreationDateTime desc no servidor, mas aqui o
                 // que importa e o usuario achar a linha que ele acabou de abrir.
-                aTickets.unshift(this._normalizarTickets([this._mapearServiceRequest(oChamado)])[0]);
+                const oLinha = this._normalizarTickets([this._mapearServiceRequest(oChamado)])[0];
+
+                aTickets.unshift(oLinha);
                 oTicketsModel.setProperty("/Tickets", aTickets);
                 this._montarListasDeFiltro(aTickets);
+
+                // Sem await: o cliente da linha nao aparece na tabela, so no dialogo SAP.
+                this._enriquecerClientesSap([oLinha]);
 
                 return this._pathDoChamadoPorId(oTicketsModel, sId);
             }).finally(() => {
@@ -836,15 +1096,34 @@ sap.ui.define([
                 }
 
                 const oCamposAtualizados = this._mapearServiceRequest(oChamado);
+                const oLinhaAtual = oTicketsModel.getProperty(sPathAtual);
 
                 // A descricao NAO vem daqui: quem a preenche e _carregarChatDoTicket, a partir da
                 // nota 10004. Gravar a string vazia que _mapearServiceRequest devolve apagaria o
                 // texto que ja esta na tela.
                 delete oCamposAtualizados.descricao;
 
+                // Mesmo motivo da descricao, com o ClienteSap no lugar do chat: as duas nascem
+                // vazias no mapeamento e sobrescrever apagaria o cliente ja resolvido.
+                const bTrocouDeCliente = String(oLinhaAtual?.buyerPartyId ?? "")
+                    !== String(oCamposAtualizados.buyerPartyId ?? "");
+
+                delete oCamposAtualizados.customerNbr;
+                delete oCamposAtualizados.customerNome;
+
+                // buyerMainContactPartyId NAO entra nos delete: vem do $select, entao sobrescrever e
+                // o certo — contato principal reatribuido no C4C tem de chegar na linha.
                 Object.keys(oCamposAtualizados).forEach((sCampo) => {
                     oTicketsModel.setProperty(sPathAtual + "/" + sCampo, oCamposAtualizados[sCampo]);
                 });
+
+                // Cliente reatribuido no C4C: manter o numero antigo mandaria o chamado para o
+                // customer errado na ALM, entao limpa e reconsulta.
+                if (bTrocouDeCliente) {
+                    oTicketsModel.setProperty(sPathAtual + "/customerNbr", "");
+                    oTicketsModel.setProperty(sPathAtual + "/customerNome", "");
+                    this._enriquecerClientesSap([oTicketsModel.getProperty(sPathAtual)]);
+                }
 
                 return true;
             }).catch((oError) => {
@@ -901,6 +1180,10 @@ sap.ui.define([
 
                 this._montarListasDeFiltro(aLinhas);
                 oTicketsModel.setProperty("/Tickets", aLinhas);
+
+                // Sem await: o numero do cliente nao tem coluna na tabela, entao segurar a carga
+                // por ele atrasaria a lista inteira por um dado que so o dialogo SAP le.
+                this._enriquecerClientesSap(aLinhas);
 
                 // A aba Chats deriva da lista de tickets: toda recarga precisa remontar, nao so a
                 // do onInit. _montarChatLista mostra a lista na hora (sem notificacao ainda);
@@ -1072,7 +1355,7 @@ sap.ui.define([
 
             // Fora do executor nao existe S-User: limpar, senao fica a lista do usuario anterior.
             if (this._sRequisitanteOrigem !== ORIGEM_REQUISITANTE_FUNCIONARIO) {
-                this.getOwnerComponent().getModel("tickets").setProperty("/TicketsSap", []);
+                this._limparCasosSap();
 
                 return Promise.resolve(false);
             }
@@ -1098,12 +1381,12 @@ sap.ui.define([
                         Log.warning("Carga de chamados SAP ignorada: requisitante sem S-User", null,
                             "megawork.mwmonitorchamados.controller.Main");
 
-                        this.getOwnerComponent().getModel("tickets").setProperty("/TicketsSap", []);
+                        this._limparCasosSap();
 
                         return false;
                     }
 
-                    return this._lerChamadosSap(sSUser, iGeracao, bAtualizar);
+                    return this._lerCasosSapDosChamados(sSUser, iGeracao, bAtualizar);
                 })
                 .finally(() => {
                     this._iCargasChamadosSapEmVoo -= 1;
@@ -1115,15 +1398,33 @@ sap.ui.define([
                 });
         },
 
+        // Junto com a lista: flag de truncado que sobra de uma carga anterior mentiria sobre a nova.
+        _limparCasosSap() {
+            const oTicketsModel = this.getOwnerComponent().getModel("tickets");
+
+            oTicketsModel.setProperty("/TicketsSap", []);
+            oTicketsModel.setProperty("/CasosSapTotal", 0);
+            oTicketsModel.setProperty("/CasosSapExibidos", 0);
+            oTicketsModel.setProperty("/CasosSapTruncado", false);
+            oTicketsModel.setProperty("/CasosSapFalha", false);
+
+            // A lista do chat e espelho de /TicketsSap: sem isso o usuario sem escopo (ou o toggle
+            // de e-mail) continuaria com os casos do usuario anterior na coluna da esquerda.
+            this._espelharCasosSapNoChat();
+        },
+
         // Falha nao abre MessageBox: a lista do C4C e o resto da tela seguem uteis.
-        _lerChamadosSap(sSUser, iGeracao, bAtualizar) {
+        _lerCasosSapDosChamados(sSUser, iGeracao, bAtualizar) {
             let oOperation = null;
 
             return Promise.resolve()
                 .then(() => {
-                    // $direct: no $batch $auto esta leitura cara (clientes + ids) segura a lista do C4C.
-                    oOperation = this.getOwnerComponent().getModel().bindContext("/ChamadosSap(...)",
-                        null, { $$groupId: "$direct" });
+                    // $direct: no $batch $auto esta leitura cara (chamados + clientes + casos)
+                    // seguraria a lista do C4C.
+                    oOperation = this.getOwnerComponent().getModel()
+                        .bindContext("/CasosSapDosChamados(...)", null, { $$groupId: "$direct" });
+                    oOperation.setParameter("contatoId", this._sRequisitanteContatoId);
+                    oOperation.setParameter("executor", true);
                     oOperation.setParameter("sUser", sSUser);
                     // So o refresh pede releitura: sem isso a tela repaga a varredura a cada entrada.
                     oOperation.setParameter("atualizar", bAtualizar === true);
@@ -1132,17 +1433,29 @@ sap.ui.define([
                 })
                 .then(() => oOperation.getBoundContext().requestObject())
                 .then((oResultado) => {
-                    // Resposta lenta do usuario anterior mostraria os chamados dele na tabela do novo.
+                    // Resposta lenta do usuario anterior mostraria os casos dele na tabela do novo.
                     if (iGeracao !== this._iGeracaoRequisitante) {
                         return false;
                     }
 
-                    const aChamados = (oResultado?.chamados ?? []).map((oChamado) => ({
-                        correlationId: String(oChamado?.correlationId ?? ""),
-                        customerNumber: String(oChamado?.customerNumber ?? "")
-                    }));
+                    const oTicketsModel = this.getOwnerComponent().getModel("tickets");
 
-                    this.getOwnerComponent().getModel("tickets").setProperty("/TicketsSap", aChamados);
+                    oTicketsModel.setProperty("/TicketsSap", (oResultado?.casos ?? [])
+                        .filter(Boolean)
+                        .map((oCaso) => ({
+                            correlationId: String(oCaso.correlationId ?? ""),
+                            caseNumber: String(oCaso.caseNumber ?? ""),
+                            subject: String(oCaso.subject ?? ""),
+                            customerNumber: String(oCaso.customerNumber ?? "")
+                        })));
+
+                    // Truncado/falha na tela: lista parcial calada afirmaria que nao ha mais caso.
+                    oTicketsModel.setProperty("/CasosSapTotal", Number(oResultado?.total ?? 0));
+                    oTicketsModel.setProperty("/CasosSapExibidos", Number(oResultado?.exibidos ?? 0));
+                    oTicketsModel.setProperty("/CasosSapTruncado", oResultado?.truncado === true);
+                    oTicketsModel.setProperty("/CasosSapFalha", oResultado?.falha === true);
+
+                    this._espelharCasosSapNoChat();
 
                     return true;
                 })
@@ -1151,7 +1464,7 @@ sap.ui.define([
                         "megawork.mwmonitorchamados.controller.Main");
 
                     if (iGeracao === this._iGeracaoRequisitante) {
-                        this.getOwnerComponent().getModel("tickets").setProperty("/TicketsSap", []);
+                        this._limparCasosSap();
                         MessageToast.show(this._getResourceBundle().getText("ticketsSapErroCarregar"));
                     }
 
@@ -1160,6 +1473,54 @@ sap.ui.define([
                 .finally(() => {
                     oOperation?.destroy();
                 });
+        },
+
+        // Espelho, nao binding: a List do chat escreve naoLidas/mensagens POR LINHA e a tabela SAP
+        // filtra o mesmo array por correlationId - bindar direto em tickets>/TicketsSap faria uma
+        // tela sujar e filtrar a outra. Roda no fim da carga (e do _limparCasosSap) em vez de num
+        // gancho de navegacao: CasosSapDosChamados repaga ate 60 GETs de detalhe sem cache na ALM.
+        _espelharCasosSapNoChat() {
+            const aCasos = this.getOwnerComponent().getModel("tickets")
+                .getProperty("/TicketsSap") ?? [];
+            const oModel = this.getView().getModel("view");
+
+            oModel.setProperty("/chatListaSap", aCasos.map((oCaso) => ({
+                // id e correlationId valem o mesmo de proposito: id e o contrato de
+                // _pathDoChatPorId/_enviarMensagemDoChat e correlationId e o parametro da ALM.
+                // caseNumber NAO serve de id - o backend nao inventa numero e ele pode vir "".
+                id: oCaso.correlationId,
+                correlationId: oCaso.correlationId,
+                customerNumber: oCaso.customerNumber,
+                nome: oCaso.caseNumber,
+                // subject vai para os DOIS campos de texto do fragmento (departamento e o subtitulo
+                // do cabecalho da conversa; ultimaMensagem e a segunda linha do item). De quebra
+                // _buscarChats filtra nome/departamento/ultimaMensagem, entao a busca cobre numero
+                // do caso e assunto sem tocar no filtro.
+                departamento: oCaso.subject,
+                ultimaMensagem: oCaso.subject,
+                // O caso nao tem data nem contador de nao lidas: "" faz formatter.dataAbertura
+                // devolver "" e 0 apaga o ObjectStatus pelo visible do markup - e por isso que o
+                // item da lista continua identico ao da tela Chats.
+                dataHora: "",
+                naoLidas: 0,
+                // Cache por linha dos comentarios lidos, no mesmo desenho de chat/chatCarregado do
+                // DetalheChamado: reabrir o caso nao repaga o GET na ALM, e a mensagem digitada no
+                // FeedInput continua morando aqui.
+                mensagens: [],
+                comentariosCarregados: false
+            })));
+
+            // A conversa aberta apontava para um item do array ANTIGO: sem soltar a selecao o
+            // cabecalho continuaria mostrando um caso que nao esta mais na lista.
+            oModel.setProperty("/chatSelecionadoSap", null);
+            oModel.setProperty("/chatMensagensSap", []);
+
+            // A lista trocou de objetos, entao a leitura em voo tem de morrer aqui: ela reresolve o
+            // path por id e gravaria mensagens/comentariosCarregados na linha NOVA, repintando uma
+            // conversa que nao esta mais selecionada. Como o finally dela passa a ser ignorado, o
+            // busy precisa ser solto junto.
+            this._iGeracaoComentariosCasoSap = (this._iGeracaoComentariosCasoSap || 0) + 1;
+            oModel.setProperty("/chatCarregandoSap", false);
         },
 
         // O tenant rotula o SRRQ como "Service Request" e no idioma do usuario do C4C; o negocio
@@ -1176,6 +1537,9 @@ sap.ui.define([
             return {
                 ID: String(oServiceRequest.ID ?? ""),
                 objectID: oServiceRequest.ObjectID ?? "",
+                // Componente ja gravado no header do C4C: o dialogo SAP abre com ele para o
+                // requisitante so trocar quando precisar.
+                componenteSapId: String(oServiceRequest.Z_COMPONENT_SFM_KUT ?? "").trim(),
                 titulo: String(oServiceRequest.Name ?? ""),
                 tipo: this._tipoTexto(oServiceRequest.ProcessingTypeCode, oServiceRequest.ProcessingTypeCodeText),
                 prioridade: oServiceRequest.ServicePriorityCode ?? "",
@@ -1186,12 +1550,73 @@ sap.ui.define([
                 situacaoTexto: oServiceRequest.ServiceRequestLifeCycleStatusCodeText ?? "",
                 responsavelId: oServiceRequest.ProcessorPartyName ?? "",
                 cliente: oServiceRequest.BuyerPartyName ?? "",
+                // Entrada do ClienteSap no dialogo SAP: o nome nao e chave, so o ID acha o C4C.
+                buyerPartyId: oServiceRequest.BuyerPartyID ?? "",
+                // Preenchidos por _enriquecerClientesSap, que vem da BusinessPartnerCollection e
+                // nao deste $select: nascem vazios para a linha ja ter a forma final.
+                customerNbr: "",
+                customerNome: "",
+                // Chave do requisitante ao lado do nome: o nome tem homonimo no C4C e so o ID
+                // resolve o S-User certo.
+                buyerMainContactPartyId: oServiceRequest.BuyerMainContactPartyID ?? "",
                 buyerMainContactPartyName: oServiceRequest.BuyerMainContactPartyName ?? "",
                 requestFinisheddatetimeContent: oServiceRequest.RequestFinisheddatetimeContent ?? "",
                 dataAbertura: this._paraIsoLocal(oServiceRequest.CreationDateTime),
                 resolvidoEm: this._paraIsoLocal(oServiceRequest.ResolvedOnDateTime),
                 descricao: ""
             };
+        },
+
+        // Numero do cliente na propria linha, em UMA chamada para os BuyerPartyID distintos: sem
+        // isso cada abertura do dialogo SAP repetiria o GET cru no C4C.
+        _enriquecerClientesSap(aLinhas) {
+            const aIds = [...new Set((aLinhas ?? [])
+                .filter((oLinha) => !oLinha?.customerNbr)
+                .map((oLinha) => String(oLinha?.buyerPartyId ?? "").trim())
+                .filter(Boolean))];
+
+            if (!aIds.length) {
+                return Promise.resolve();
+            }
+
+            let oOperation = null;
+
+            return Promise.resolve()
+                .then(() => {
+                    // $direct: no $batch default este GET lento seguraria a carga da tabela.
+                    oOperation = this.getOwnerComponent().getModel().bindContext("/ClientesSap(...)",
+                        null, { $$groupId: "$direct" });
+                    oOperation.setParameter("businessPartnerIds", aIds.join(","));
+
+                    return oOperation.invoke();
+                })
+                .then(() => oOperation.getBoundContext().requestObject())
+                .then((oResultado) => {
+                    // Por id, nao por posicao: o C4C nao devolve o lote na ordem do $filter e
+                    // parceiro sem cadastro simplesmente nao volta.
+                    const mPorId = new Map((oResultado?.clientes ?? [])
+                        .filter(Boolean)
+                        .map((oCliente) => [String(oCliente.businessPartnerId ?? "").trim(), oCliente]));
+
+                    aLinhas.forEach((oLinha) => {
+                        const oCliente = mPorId.get(String(oLinha?.buyerPartyId ?? "").trim());
+
+                        if (!oCliente) {
+                            return;
+                        }
+
+                        oLinha.customerNbr = String(oCliente.customerNumber ?? "").trim();
+                        oLinha.customerNome = String(oCliente.nome ?? "").trim();
+                    });
+                })
+                .catch((oError) => {
+                    // warning e nao error: a linha sem numero cai no fallback do proprio dialogo.
+                    Log.warning("Falha ao resolver o cliente dos chamados da lista", oError,
+                        "megawork.mwmonitorchamados.controller.Main");
+                })
+                .finally(() => {
+                    oOperation?.destroy();
+                });
         },
 
         _montarListasDeFiltro(aLinhas) {
@@ -1728,7 +2153,16 @@ sap.ui.define([
                 });
         },
 
-        onAbrirAmbientesSap() {
+        // Espera a consulta do cliente: /AmbientesSap e por customerNumber, e clicar antes dela
+        // responder mandaria numero vazio ao backend e traria a MessageBox de erro sem motivo.
+        async onAbrirAmbientesSap() {
+            await this._pClienteChamadoSap;
+
+            if (!this._modeloChamadoSap().getProperty("/customerNbr")) {
+                MessageToast.show(this._getResourceBundle().getText("abrirChamadoSapAmbientesSemCliente"));
+                return;
+            }
+
             this._abrirAmbientesSap();
         },
 
@@ -1779,12 +2213,22 @@ sap.ui.define([
 
         _carregarAmbientesSap() {
             const oModelo = this.getView().getModel("ambientesSap");
+            const sCustomerNbr = this._modeloChamadoSap().getProperty("/customerNbr") || "";
+
+            // Numero vazio NAO e recusado pelo backend: ele cai no customer da Megawork e
+            // listaria ambientes de outro cliente sem nenhum aviso na tela.
+            if (!sCustomerNbr) {
+                oModelo.setProperty("/carregando", false);
+                this._aAmbientesSap = [];
+                this._filtrarAmbientesSap();
+
+                return Promise.resolve();
+            }
+
             oModelo.setProperty("/carregando", true);
 
-            // Cliente do proprio dialogo: o dia que ele deixar de ser fixo, isto acompanha sozinho.
             const oOperation = this.getOwnerComponent().getModel().bindContext("/AmbientesSap(...)");
-            oOperation.setParameter("customerNumber",
-                this._modeloChamadoSap().getProperty("/customerNbr") || CUSTOMER_NBR_FIXO);
+            oOperation.setParameter("customerNumber", sCustomerNbr);
 
             return oOperation.invoke()
                 .then(() => oOperation.getBoundContext().requestObject())
@@ -2640,20 +3084,45 @@ sap.ui.define([
                 return;
             }
 
-            // Requisitante do CHAMADO, nao o usuario logado: e o S-User dele que vai no Reporter.
+            // Requisitante do CHAMADO, nao o usuario logado: e o S-User dele que vai no Customer do caso SAP.
             const sRequisitante = String(oContext.getProperty("buyerMainContactPartyName") ?? "").trim();
+            // Chave do contato: o nome tem homonimo no C4C, entao e o ID que aponta o S-User certo.
+            const sRequisitanteContatoId = String(oContext.getProperty("buyerMainContactPartyId") ?? "").trim();
+            const sBuyerPartyId = String(oContext.getProperty("buyerPartyId") ?? "").trim();
+            // Resolvido na carga da lista: so chamado criado nesta sessao (ou lote que falhou)
+            // chega aqui sem numero e precisa da consulta unitaria.
+            const sCustomerNbr = String(oContext.getProperty("customerNbr") ?? "").trim();
+            const sComponenteSapId = String(oContext.getProperty("componenteSapId") ?? "").trim();
 
             this._modeloChamadoSap().setData({
                 origemId: String(oContext.getProperty("ID") ?? "").trim(),
+                // Chave do PATCH do componente: origemId e o ID visivel e nao acha o header no C4C.
+                objectID: String(oContext.getProperty("objectID") ?? "").trim(),
                 origemTitulo: String(oContext.getProperty("titulo") ?? "").trim(),
                 titulo: String(oContext.getProperty("titulo") ?? "").trim(),
                 descricao: String(oContext.getProperty("descricao") ?? "").trim(),
-                prioridade: NOVO_CHAMADO_DEFAULTS.prioridade,
-                componenteSap: null,
+                // NORMAL no fallback e nao BAIXA: codigo desconhecido nao e motivo para abrir o
+                // caso na menor prioridade do enum da SAP.
+                prioridade: PRIORIDADE_CHAMADO_DO_C4C[String(oContext.getProperty("prioridade") ?? "").trim()]
+                    ?? "NORMAL",
                 ambiente: null,
-                customerNbr: CUSTOMER_NBR_FIXO,
-                customerNome: CUSTOMER_NOME_FIXO,
+                // O C4C guarda so o id do componente; chave/descricao so aparecem no value help.
+                componenteSap: sComponenteSapId ? { id: sComponenteSapId, chave: "", descricao: "" } : null,
+                // Base da comparacao no confirmar: sem ela o PATCH iria sem o usuario trocar nada.
+                componenteSapOriginal: sComponenteSapId,
+                // buyerPartyId fica no modelo para a resposta lenta saber se ainda e o chamado dela.
+                buyerPartyId: sBuyerPartyId,
+                customerNbr: sCustomerNbr,
+                customerNome: sCustomerNbr
+                    ? String(oContext.getProperty("customerNome") ?? "").trim()
+                    : "",
+                // Nao nasce carregando quando a linha ja trouxe o numero: o campo apareceria com
+                // spinner e "Consultando cliente..." para um dado que ja esta na mao.
+                customerCarregando: !sCustomerNbr,
+                customerFalha: false,
                 requisitante: sRequisitante,
+                // Guard da resposta lenta: sem o ID, dois homonimos passariam um pelo outro.
+                requisitanteContatoId: sRequisitanteContatoId,
                 sUser: "",
                 sUserNome: "",
                 // Nasce carregando para o campo nao piscar "nao encontrado" antes da consulta.
@@ -2688,8 +3157,101 @@ sap.ui.define([
             }
 
             // Sem await: o S-User e so informativo e nao pode segurar a abertura do dialogo.
-            this._carregarSUserChamadoSap(sRequisitante);
+            this._carregarSUserChamadoSap(sRequisitanteContatoId, sRequisitante);
             this._carregarSUserLogadoChamadoSap();
+            // Guardado porque onAbrirAmbientesSap precisa esperar por ele antes de consultar.
+            this._pClienteChamadoSap = sCustomerNbr
+                ? Promise.resolve()
+                : this._carregarClienteChamadoSap(sBuyerPartyId);
+        },
+
+        // Falha nao abre MessageBox: o status ao lado do campo avisa e o dialogo segue util.
+        _carregarClienteChamadoSap(sBuyerPartyId) {
+            const oModelo = this._modeloChamadoSap();
+
+            oModelo.setProperty("/customerCarregando", true);
+            oModelo.setProperty("/customerFalha", false);
+
+            // Chamado sem BuyerPartyID nao tem chave de busca: "nao encontrado" e o estado honesto,
+            // e evita um 400 fixo no backend. Encerra o carregando ou o campo gira para sempre.
+            if (!sBuyerPartyId) {
+                oModelo.setProperty("/customerNbr", "");
+                oModelo.setProperty("/customerNome", "");
+                oModelo.setProperty("/customerCarregando", false);
+
+                return Promise.resolve();
+            }
+
+            return this._consultarClienteSap(sBuyerPartyId)
+                .then((oResultado) => {
+                    // Reabrir noutro chamado antes da resposta traria o cliente do chamado velho.
+                    if (oModelo.getProperty("/buyerPartyId") !== sBuyerPartyId) {
+                        return;
+                    }
+
+                    const sCustomerNumber = String(oResultado?.customerNumber ?? "");
+
+                    oModelo.setProperty("/customerNbr", sCustomerNumber);
+                    // Nome SO com numero: sem isso um nome sozinho esconderia que o cliente nao
+                    // tem customerNumber, e o dialogo de ambientes nao teria o que consultar.
+                    oModelo.setProperty("/customerNome",
+                        sCustomerNumber ? (oResultado?.nome ?? "") : "");
+                    oModelo.setProperty("/customerFalha", oResultado?.falha === true);
+                })
+                .catch((oError) => {
+                    // _consultarClienteSap nao deixa rejeitar; sobra erro ao escrever o modelo.
+                    Log.error("Falha ao exibir o cliente do chamado", oError,
+                        "megawork.mwmonitorchamados.controller.Main");
+                    oModelo.setProperty("/customerNbr", "");
+                    oModelo.setProperty("/customerNome", "");
+                    oModelo.setProperty("/customerFalha", true);
+                })
+                .finally(() => {
+                    // So a resposta do chamado atual apaga o busy: a do chamado anterior faria o
+                    // campo dizer "nao encontrado" enquanto a consulta boa ainda esta em voo.
+                    if (oModelo.getProperty("/buyerPartyId") === sBuyerPartyId) {
+                        oModelo.setProperty("/customerCarregando", false);
+                    }
+                });
+        },
+
+        // Resolve SEMPRE {customerNumber, nome, falha}: quem le trata falha e vazio de formas diferentes.
+        _consultarClienteSap(sBuyerPartyId) {
+            let oOperation = null;
+
+            return Promise.resolve()
+                .then(() => {
+                    // $direct: o GET cru no C4C e lento e no $batch default seguraria a lista.
+                    oOperation = this.getOwnerComponent().getModel().bindContext("/ClienteSap(...)",
+                        null, { $$groupId: "$direct" });
+                    oOperation.setParameter("businessPartnerId", sBuyerPartyId);
+
+                    return oOperation.invoke();
+                })
+                .then(() => oOperation.getBoundContext().requestObject())
+                .then((oCliente) => ({
+                    customerNumber: String(oCliente?.customerNumber ?? "").trim(),
+                    nome: String(oCliente?.nome ?? "").trim(),
+                    // O handler engole a falha do C4C e responde 200: o flag dele e a unica
+                    // pista de que o vazio veio de integracao caida, nao de cadastro.
+                    falha: oCliente?.falha === true
+                }))
+                .catch((oError) => {
+                    // warning, nao error: mesma classe de evento do _consultarSUserDoRequisitante.
+                    Log.warning(`Falha ao resolver o cliente do BusinessPartner ${sBuyerPartyId}`, oError,
+                        "megawork.mwmonitorchamados.controller.Main");
+
+                    // So 404 e cadastro: acusar cadastro por queda de integracao manda o usuario
+                    // abrir chamado de um problema que nao existe.
+                    return {
+                        customerNumber: "",
+                        nome: "",
+                        falha: Number(oError?.status ?? oError?.error?.code ?? 0) !== 404
+                    };
+                })
+                .finally(() => {
+                    oOperation?.destroy();
+                });
         },
 
         // Espelha o campo do cliente, mas pelo e-mail do login: o ContatoSap ja fixa o customer.
@@ -2730,15 +3292,15 @@ sap.ui.define([
         },
 
         // Falha nao abre MessageBox: o campo fica com o aviso e o resto do dialogo segue util.
-        _carregarSUserChamadoSap(sRequisitante) {
+        _carregarSUserChamadoSap(sContatoId, sRequisitante) {
             const oModelo = this._modeloChamadoSap();
 
             oModelo.setProperty("/sUserCarregando", true);
             oModelo.setProperty("/sUserFalha", false);
 
-            // Chamado sem requisitante no header nao tem por onde comecar a cadeia; "nao
-            // encontrado" e o estado honesto, e evita um 400 fixo no backend.
-            if (!sRequisitante) {
+            // Sem chave NEM nome nao ha por onde comecar a cadeia; "nao encontrado" e o estado
+            // honesto, e evita o 400 fixo do backend (que so recusa quando os dois faltam).
+            if (!sContatoId && !sRequisitante) {
                 oModelo.setProperty("/sUser", "");
                 oModelo.setProperty("/sUserNome", "");
                 oModelo.setProperty("/sUserCarregando", false);
@@ -2746,10 +3308,12 @@ sap.ui.define([
                 return Promise.resolve();
             }
 
-            return this._lerSUserPorRequisitante(sRequisitante)
+            return this._lerSUserPorRequisitante(sContatoId, sRequisitante)
                 .then((oResultado) => {
-                    // Reabrir noutro chamado antes da resposta traria o S-User do requisitante velho.
-                    if (oModelo.getProperty("/requisitante") !== sRequisitante) {
+                    // Compara a identidade da consulta, nao o rotulo: reabrir noutro chamado antes
+                    // da resposta traria o S-User do requisitante velho.
+                    if (oModelo.getProperty("/requisitanteContatoId") !== sContatoId
+                        || oModelo.getProperty("/requisitante") !== sRequisitante) {
                         return;
                     }
 
@@ -2771,22 +3335,32 @@ sap.ui.define([
                     oModelo.setProperty("/sUserFalha", true);
                 })
                 .finally(() => {
-                    oModelo.setProperty("/sUserCarregando", false);
+                    // Mesmo guard do .then: a resposta lenta do chamado anterior zerando o busy
+                    // faria o dialogo atual dizer "nao encontrado" com a consulta ainda em voo.
+                    if (oModelo.getProperty("/requisitanteContatoId") === sContatoId
+                        && oModelo.getProperty("/requisitante") === sRequisitante) {
+                        oModelo.setProperty("/sUserCarregando", false);
+                    }
                 });
         },
 
         // Cache por requisitante: dois chamados do mesmo contato nao repagam a varredura da ALM.
-        _lerSUserPorRequisitante(sRequisitante) {
+        _lerSUserPorRequisitante(sContatoId, sRequisitante) {
             this._mSUserPorRequisitante ??= new Map();
 
-            const sChave = String(sRequisitante);
+            // Chave pelo contatoId quando existir, em namespace proprio: chavear pelo nome faria dois
+            // homonimos dividirem a entrada e a primeira resposta venceria. O nome entra junto porque
+            // a chave pode nao resolver e o backend cair no fallback por nome.
+            const sChave = sContatoId
+                ? ("id:" + sContatoId + "|" + sRequisitante)
+                : ("nome:" + sRequisitante);
             const pCacheada = this._mSUserPorRequisitante.get(sChave);
 
             if (pCacheada) {
                 return pCacheada;
             }
 
-            const pSUser = this._consultarSUserPorNome(sRequisitante);
+            const pSUser = this._consultarSUserDoRequisitante(sContatoId, sRequisitante);
 
             this._mSUserPorRequisitante.set(sChave, pSUser);
 
@@ -2802,14 +3376,17 @@ sap.ui.define([
         },
 
         // Resolve SEMPRE {sUser, primeiroNome, falha}: promise cacheada que rejeita vira unhandled rejection.
-        _consultarSUserPorNome(sRequisitante) {
+        _consultarSUserDoRequisitante(sContatoId, sRequisitante) {
             let oOperation = null;
 
             return Promise.resolve()
                 .then(() => {
                     // $direct: no $batch default a varredura paginada de contatos seguraria a lista.
-                    oOperation = this.getOwnerComponent().getModel().bindContext("/ContatoSapPorNome(...)",
-                        null, { $$groupId: "$direct" });
+                    oOperation = this.getOwnerComponent().getModel()
+                        .bindContext("/ContatoSapDoRequisitante(...)", null, { $$groupId: "$direct" });
+                    // Os dois: o backend resolve pela chave e cai no nome quando o chamado antigo
+                    // nao tem BuyerMainContactPartyID.
+                    oOperation.setParameter("contatoId", sContatoId);
                     oOperation.setParameter("nome", sRequisitante);
 
                     return oOperation.invoke();
@@ -2821,7 +3398,8 @@ sap.ui.define([
                     falha: false
                 }))
                 .catch((oError) => {
-                    Log.warning(`Falha ao resolver o S-User do requisitante ${sRequisitante}`, oError,
+                    Log.warning("Falha ao resolver o S-User do requisitante "
+                        + `${sContatoId || "(sem contatoId)"} / ${sRequisitante || "(sem nome)"}`, oError,
                         "megawork.mwmonitorchamados.controller.Main");
 
                     // So 404 e cadastro: acusar cadastro por queda de integracao manda o usuario
@@ -2934,6 +3512,7 @@ sap.ui.define([
             this._abrirComponentesSap("chamadoSap");
         },
 
+        // Irmao do onLimparComponenteSap: aquele e fixo em "novoChamado" e limparia o wizard.
         onLimparComponenteChamadoSap() {
             this._modeloChamadoSap().setProperty("/componenteSap", null);
         },
@@ -2942,26 +3521,277 @@ sap.ui.define([
             this.byId("dialogAbrirChamadoSap")?.close();
         },
 
-        // TODO: plugar o POST da solicitacao de suporte SAP (Cloud ALM) com estes dados.
-        onConfirmarChamadoSap() {
+        // Chaves = nomes dos parametros da action AbrirCasoSap. sUserCliente vem de /sUser (rotulo
+        // "S-User Cliente") e sUserRequisitante de /sUserLogado: trocar os dois abre o caso no nome errado.
+        _dadosCasoSapDoDialogo(oDados) {
+            return {
+                prioridade: String(oDados.prioridade ?? "").trim(),
+                componenteId: String(oDados.componenteSap?.id ?? "").trim(),
+                customerNumber: String(oDados.customerNbr ?? "").trim(),
+                installationNumber: String(oDados.ambiente?.installationNbr ?? "").trim(),
+                systemNbr: String(oDados.ambiente?.systemNbr ?? "").trim(),
+                titulo: String(oDados.titulo ?? "").trim(),
+                descricao: String(oDados.descricao ?? "").trim(),
+                sUserCliente: String(oDados.sUser ?? "").trim(),
+                sUserRequisitante: String(oDados.sUserLogado ?? "").trim()
+            };
+        },
+
+        // Devolve a chave i18n do primeiro campo faltando, na ordem da tela, ou "" quando pode enviar.
+        // sUserCliente fica de fora: e o customer do caso, opcional no contrato da SAP.
+        _validarCasoSap(oCaso) {
+            if (!oCaso.titulo) {
+                return "abrirChamadoSapErroTitulo";
+            }
+
+            if (!oCaso.descricao) {
+                return "abrirChamadoSapErroDescricao";
+            }
+
+            if (!oCaso.componenteId) {
+                return "abrirChamadoSapErroComponente";
+            }
+
+            // Os DOIS numeros, nao so o objeto /ambiente: o backend normaliza com String(x ?? "")
+            // e um ambiente escolhido pode chegar com numero vazio.
+            if (!oCaso.installationNumber || !oCaso.systemNbr) {
+                return "abrirChamadoSapErroAmbiente";
+            }
+
+            if (!oCaso.customerNumber) {
+                return "abrirChamadoSapErroCliente";
+            }
+
+            if (!oCaso.sUserRequisitante) {
+                return "abrirChamadoSapErroSUserRequisitante";
+            }
+
+            return "";
+        },
+
+        // Chama a action AbrirCasoSap, que cria caso REAL no SAP Cloud ALM: o POST nao tem chave de
+        // deduplicacao, entao nada aqui pode reenviar sozinho depois de falha ou timeout.
+        async onConfirmarChamadoSap() {
+            // Trava de re-entrancia: o busy do dialogo cai no finally e um segundo clique abriria
+            // um segundo caso real na SAP, que nao da para desfazer.
+            if (this._bAbrindoCasoSap) {
+                return;
+            }
+
+            this._bAbrindoCasoSap = true;
+
             const oBundle = this._getResourceBundle();
-            const oDados = this._modeloChamadoSap().getData();
+            const oModelo = this._modeloChamadoSap();
+            let oOperation = null;
 
-            if (!String(oDados.titulo ?? "").trim()) {
-                MessageBox.error(oBundle.getText("abrirChamadoSapErroTitulo"));
-                return;
+            try {
+                // Antes do await: sem a trava ligada o dialogo segue clicavel durante a espera do
+                // cliente, e Cancelar ali deixaria o envio correndo por baixo ate criar o caso.
+                oModelo.setProperty("/enviando", true);
+
+                // Identidade de quem clicou: reabrir o dialogo reusa o mesmo JSONModel, entao sem
+                // isso o envio pendente continuaria com os dados meio digitados do outro chamado.
+                const sOrigemId = String(oModelo.getProperty("/origemId") ?? "").trim();
+
+                // Cliente e S-User sao resolvidos DEPOIS da abertura do dialogo: enviar sem esperar
+                // mandaria customerNumber/reporter vazios e a SAP recusaria com 400 generico.
+                await this._pClienteChamadoSap;
+
+                if (String(oModelo.getProperty("/origemId") ?? "").trim() !== sOrigemId
+                    || this.byId("dialogAbrirChamadoSap")?.isOpen() !== true) {
+                    Log.warning("Abertura de chamado SAP abandonada: o dialogo mudou durante a espera",
+                        sOrigemId, "megawork.mwmonitorchamados.controller.Main");
+                    return;
+                }
+
+                // sUserCarregando junto: e a consulta mais lenta das tres e alimenta o customer do
+                // caso, entao enviar antes dela montaria o payload sem o contato do cliente.
+                if (oModelo.getProperty("/customerCarregando")
+                    || oModelo.getProperty("/sUserCarregando")
+                    || oModelo.getProperty("/sUserLogadoCarregando")) {
+                    MessageBox.error(oBundle.getText("abrirChamadoSapAguardeCarregando"));
+                    return;
+                }
+
+                // Lido uma vez so: reler depois do await pegaria edicao feita no meio do envio.
+                const oCaso = this._dadosCasoSapDoDialogo(oModelo.getData());
+                const sChaveErro = this._validarCasoSap(oCaso);
+
+                if (sChaveErro) {
+                    MessageBox.error(oBundle.getText(sChaveErro));
+                    return;
+                }
+
+                // Alvo do PATCH congelado junto do payload: o dialogo pode trocar de chamado
+                // enquanto o POST corre, e reler o modelo depois acertaria o header errado.
+                const sObjectID = String(oModelo.getProperty("/objectID") ?? "").trim();
+                const sComponenteOriginal = String(oModelo.getProperty("/componenteSapOriginal") ?? "").trim();
+
+                // $direct: escrita lenta na ALM nao pode segurar o $batch do resto do dialogo.
+                oOperation = this.getOwnerComponent().getModel()
+                    .bindContext("/AbrirCasoSap(...)", null, { $$groupId: "$direct" });
+
+                // Nome por nome, sem laco: os parametros sao o contrato da action e o par
+                // sUserCliente/sUserRequisitante e facil de inverter sem ver os dois lado a lado.
+                oOperation.setParameter("prioridade", oCaso.prioridade);
+                oOperation.setParameter("componenteId", oCaso.componenteId);
+                oOperation.setParameter("customerNumber", oCaso.customerNumber);
+                oOperation.setParameter("installationNumber", oCaso.installationNumber);
+                oOperation.setParameter("systemNbr", oCaso.systemNbr);
+                oOperation.setParameter("titulo", oCaso.titulo);
+                oOperation.setParameter("descricao", oCaso.descricao);
+                oOperation.setParameter("sUserCliente", oCaso.sUserCliente);
+                oOperation.setParameter("sUserRequisitante", oCaso.sUserRequisitante);
+
+                await oOperation.invoke();
+
+                const oResultado = await oOperation.getBoundContext().requestObject();
+                const sCorrelationId = String(oResultado?.correlationId ?? "").trim();
+                const sCaseNumber = String(oResultado?.caseNumber ?? "").trim();
+
+                // Sem a referencia nao ha como reabrir o caso: avisa que ele PODE existir em vez de
+                // dar sucesso mudo, porque um novo envio as cegas duplicaria o registro na SAP.
+                if (!sCorrelationId) {
+                    throw new Error(oBundle.getText("abrirChamadoSapErroSemReferencia"));
+                }
+
+                // PATCH do componente so agora: POST recusado deixaria o C4C alterado sem caso na SAP.
+                // Pulado no modo simulado do backend, que so blinda a ALM: sem isso o "teste sem
+                // criar nada" ainda alteraria de verdade o header do chamado do cliente no C4C.
+                const sResultadoComponente = sCorrelationId.startsWith("SIMULADO-")
+                    ? "nada"
+                    : await this._propagarComponenteChamadoSap(
+                        sObjectID, oCaso.componenteId, sComponenteOriginal);
+
+                this._concluirCasoSapCriado(sCorrelationId, sCaseNumber, sResultadoComponente);
+            } catch (oError) {
+                this._falhaAoAbrirCasoSap(oError);
+            } finally {
+                oOperation?.destroy();
+                oModelo.setProperty("/enviando", false);
+                this._bAbrindoCasoSap = false;
             }
+        },
 
-            if (!String(oDados.descricao ?? "").trim()) {
-                MessageBox.error(oBundle.getText("abrirChamadoSapErroDescricao"));
-                return;
-            }
+        // Nao reenvia nada e nao fecha o dialogo: sem chave de deduplicacao, repetir o envio por
+        // conta propria criaria um segundo caso real na SAP.
+        _falhaAoAbrirCasoSap(oError) {
+            const oBundle = this._getResourceBundle();
+            const sDetalhe = String(oError?.message ?? "").trim();
+            const iStatus = Number(oError?.status ?? 0);
 
-            Log.info("Abertura de chamado SAP solicitada", JSON.stringify(oDados),
+            Log.error("Falha ao abrir o chamado SAP", oError,
                 "megawork.mwmonitorchamados.controller.Main");
 
-            // Nao fecha enquanto nao houver POST: fechar aqui jogaria fora o texto digitado.
-            MessageToast.show(oBundle.getText("abrirChamadoSapNaoImplementado"));
+            // So 400/428 provam que o caso NAO nasceu (a ALM recusou o dado antes de gravar).
+            // Timeout e 5xx podem ter criado o caso, e dizer "nao foi possivel" ali convida o
+            // reenvio as cegas - que duplica registro real, porque o POST nao tem deduplicacao.
+            const bRecusado = iStatus === 400 || iStatus === 428;
+            const sManchete = bRecusado
+                ? oBundle.getText("abrirChamadoSapErroCriar")
+                : oBundle.getText("abrirChamadoSapErroIncerto");
+
+            // Detalhe da SAP junto: a manchete sozinha esconde o campo recusado.
+            MessageBox[bRecusado ? "error" : "warning"](sDetalhe
+                ? sManchete + "\n\n" + sDetalhe
+                : sManchete);
+        },
+
+        // So depois do caso existir na SAP: em erro o dialogo fica aberto para nao jogar fora o
+        // texto digitado, e o caseNumber vazio nao invalida nada - o caso ja foi criado.
+        _concluirCasoSapCriado(sCorrelationId, sCaseNumber, sResultadoComponente) {
+            const oBundle = this._getResourceBundle();
+
+            this.byId("dialogAbrirChamadoSap")?.close();
+
+            const sTexto = sCaseNumber
+                ? oBundle.getText("abrirChamadoSapCriado", [sCaseNumber])
+                : oBundle.getText("abrirChamadoSapCriadoSemNumero", [sCorrelationId]);
+
+            // Um MessageBox so, e nao toast: dois avisos encadeados soterrariam o numero do caso,
+            // que e a unica chave util do registro criado.
+            MessageBox.success(sResultadoComponente === "erro"
+                ? sTexto + "\n\n" + oBundle.getText("abrirChamadoSapComponenteErro")
+                : sTexto);
+
+            Log.info("Caso SAP aberto", sCorrelationId + " / " + (sCaseNumber || "(numero pendente)"),
+                "megawork.mwmonitorchamados.controller.Main");
+
+            // Sem await: a falha da carga ja tem tratamento proprio e nao pode segurar a mensagem.
+            this._carregarChamadosSap(true);
+        },
+
+        // Campo acessorio: falha aqui nao pode derrubar o chamado ja aberto, so avisa e fica logada.
+        // Devolve "nada" | "ok" | "erro" porque quem chama decide a mensagem final da confirmacao.
+        // Recebe o alvo por parametro em vez de reler o modelo: entre o clique e o fim do POST o
+        // dialogo pode ter trocado de chamado, e o PATCH sairia contra o header errado.
+        async _propagarComponenteChamadoSap(sObjectIDAlvo, sComponenteNovo, sComponenteOriginal) {
+            const oModelo = this._modeloChamadoSap();
+            const sObjectID = String(sObjectIDAlvo ?? "").trim();
+            const sNovo = String(sComponenteNovo ?? "").trim();
+            const sOriginal = String(sComponenteOriginal ?? "").trim();
+
+            // So quando o requisitante realmente trocou: PATCH a toa gastaria uma escrita no C4C.
+            if (sNovo === sOriginal) {
+                return "nada";
+            }
+
+            // Trocou mas nao ha chave: sem o log a perda seria invisivel, porque a action que
+            // reportaria "ObjectID nao informado" nem chega a ser chamada.
+            if (!sObjectID) {
+                Log.warning("Componente SAP nao propagado: chamado sem ObjectID", "",
+                    "megawork.mwmonitorchamados.controller.Main");
+                return "erro";
+            }
+
+            let oOperation = null;
+
+            try {
+                // $direct: escrita no C4C e lenta e no $batch default seguraria o resto do dialogo.
+                oOperation = this.getOwnerComponent().getModel()
+                    .bindContext("/AtualizarComponenteChamado(...)", null, { $$groupId: "$direct" });
+                oOperation.setParameter("objectID", sObjectID);
+                oOperation.setParameter("componenteId", sNovo);
+
+                await oOperation.invoke();
+
+                const oResultado = await oOperation.getBoundContext().requestObject();
+
+                if (!oResultado || oResultado.falha === true || oResultado.atualizado !== true) {
+                    Log.warning("Componente SAP nao propagado para o header do chamado " + sObjectID,
+                        String(oResultado?.mensagem ?? ""), "megawork.mwmonitorchamados.controller.Main");
+                    return "erro";
+                }
+
+                // Guard de reabertura, como os irmaos do dialogo: sem ele a resposta lenta do
+                // chamado anterior reescreveria a base de comparacao do chamado ja aberto na tela.
+                if (String(oModelo.getProperty("/objectID") ?? "").trim() === sObjectID) {
+                    oModelo.setProperty("/componenteSapOriginal", sNovo);
+                }
+
+                this._espelharComponenteNaLinha(sObjectID, sNovo);
+
+                return "ok";
+            } catch (oError) {
+                Log.warning("Falha ao propagar o componente SAP do chamado " + sObjectID, oError,
+                    "megawork.mwmonitorchamados.controller.Main");
+
+                return "erro";
+            } finally {
+                oOperation?.destroy();
+            }
+        },
+
+        // Sem espelhar, reabrir o dialogo mostraria o componente antigo; o objectID e conferido
+        // porque o usuario pode ter navegado enquanto o PATCH corria.
+        _espelharComponenteNaLinha(sObjectID, sComponenteId) {
+            const oContext = this._paginaDetalhe().getBindingContext("tickets");
+
+            if (String(oContext?.getProperty("objectID") ?? "").trim() !== sObjectID) {
+                return;
+            }
+
+            oContext.getModel().setProperty(oContext.getPath() + "/componenteSapId", sComponenteId);
         },
 
         async _atualizarStatusChamado(oContext, sStatus, sStatusTexto) {
@@ -3398,6 +4228,8 @@ sap.ui.define([
 
             // Capturado antes da cadeia: _resetNovoChamado zera o modelo e o FileUploader.
             const aAnexos = this.getView().getModel("novoChamado").getProperty("/anexos") ?? [];
+            // Toggle de e-mail pode trocar o requisitante durante o POST.
+            const iGeracao = this._iGeracaoRequisitante;
 
             this._criarTicket(oData).then((oCriado) => {
                 // Daqui para baixo o chamado JA existe no C4C e nao ha rollback: o envio dos anexos
@@ -3414,6 +4246,12 @@ sap.ui.define([
                 this._relatarEnvioDeAnexos(sNewId, aAnexos.length, oEnvio);
 
                 this._resetNovoChamado();
+
+                // O toast e a lista ja avisaram: navegar agora tiraria o usuario da Home a que o
+                // toggle de e-mail o levou.
+                if (iGeracao !== this._iGeracaoRequisitante) {
+                    return;
+                }
 
                 this.byId("mainContents").to(this.createId("acompanharChamados"));
                 this.byId("sideNavigation").setSelectedKey("acompanharChamados");
@@ -3529,6 +4367,21 @@ sap.ui.define([
                 situacao: oCriado?.ServiceRequestLifeCycleStatusCode ?? "",
                 situacaoTexto: oCriado?.ServiceRequestLifeCycleStatusCodeText ?? "",
                 responsavelId: oCriado?.ProcessorPartyName ?? "",
+                // Semeado do proprio payload: sem ele o dialogo SAP do chamado recem-criado nao
+                // resolveria o cliente e a ajuda de ambientes ficaria travada ate um refresh.
+                buyerPartyId: String(oCriado?.BuyerPartyID ?? oData.cliente ?? "").trim(),
+                // Mesmo valor que o create mandou em BuyerMainContactPartyID: sem ele o dialogo SAP
+                // do chamado recem-criado nao teria por onde resolver o S-User do requisitante.
+                buyerMainContactPartyId: String(this._sRequisitanteContatoId ?? "").trim(),
+                // Nome junto porque e o fallback do sUserNome: sem ele um contato da ALM sem
+                // firstname mostraria "nao encontrado" ao lado do S-User preenchido.
+                buyerMainContactPartyName: String(this._sRequisitanteNome ?? "").trim(),
+                // Mesmo valor que o create mandou em Z_COMPONENT_SFM_KUT: sem ele o dialogo SAP do
+                // chamado recem-criado abriria sem o componente que ja esta gravado no header.
+                componenteSapId: String(oCriado?.Z_COMPONENT_SFM_KUT ?? oData.componenteSap?.id ?? "").trim(),
+                // Mesma forma das linhas vindas do C4C; _enriquecerClientesSap preenche abaixo.
+                customerNbr: "",
+                customerNome: "",
                 dataAbertura: this._paraIsoLocal(oCriado?.CreationDateTime) || this._agoraIso(),
                 resolvidoEm: "",
                 descricao: oData.descricao.trim(),
@@ -3544,6 +4397,9 @@ sap.ui.define([
             oTicketsModel.setProperty("/Tickets", aTickets);
 
             this._montarListasDeFiltro(aTickets);
+
+            // Sem await: quem acabou de criar o chamado nao espera pelo numero do cliente.
+            this._enriquecerClientesSap([aTickets[0]]);
         },
 
         _resetNovoChamado() {
@@ -3653,19 +4509,14 @@ sap.ui.define([
                     return false;
                 }
 
-                // Funcionario interno (fallback pela EmployeeCollection): a collection nao tem
-                // AccountID, entao clientes vem SEMPRE vazio - exigir empresa aqui bloquearia um
-                // usuario que ja tem contatoId valido para filtrar chamados e responder no chat.
-                // Aviso via MessageToast por ser o componente menos intrusivo: e informativo, nao
-                // ha acao a tomar e o app continua utilizavel, entao um MessageBox exigindo clique
-                // atrapalharia a entrada na tela a cada carga.
+                // Funcionario interno (fallback pela EmployeeCollection): sem AccountID na
+                // collection, clientes vem SEMPRE vazio - exigir empresa aqui bloquearia um usuario
+                // com contatoId valido. Fica so no log: nao ha acao a tomar e o app segue utilizavel.
                 if (this._sRequisitanteOrigem === ORIGEM_REQUISITANTE_FUNCIONARIO) {
                     Log.warning("Requisitante identificado como funcionario interno pela EmployeeCollection: "
                         + "sem empresas vinculadas, o seletor de empresa do wizard fica vazio e o chamado "
                         + "criado sai sem BuyerPartyID", null,
                         "megawork.mwmonitorchamados.controller.Main");
-
-                    MessageToast.show(this._getResourceBundle().getText("requisitanteFuncionarioInterno"));
 
                     // Libera o busy da pagina "criarChamado": ele NAO pode depender de /clientes,
                     // que neste caminho fica vazio para sempre - o wizard ficaria girando justamente
@@ -3901,8 +4752,16 @@ sap.ui.define([
                 return false;
             }
 
+            // Toggle de e-mail dev pode trocar o requisitante enquanto esta carga viaja.
+            const iGeracao = this._iGeracaoRequisitante;
+
             try {
                 const aChamados = await this._buscarChamadosCockpit();
+
+                // Repintar aqui poria os recentes do requisitante anterior nos cards da Home.
+                if (iGeracao !== this._iGeracaoRequisitante) {
+                    return false;
+                }
 
                 this._renderizarCockpit(aChamados);
 
@@ -3910,6 +4769,12 @@ sap.ui.define([
             } catch (oError) {
                 Log.error("Falha ao carregar o cockpit a partir do C4C", oError,
                     "megawork.mwmonitorchamados.controller.Main");
+
+                // Falha de carga obsoleta: o toast e o clear apagariam o cockpit do requisitante novo.
+                if (iGeracao !== this._iGeracaoRequisitante) {
+                    return false;
+                }
+
                 MessageToast.show("Falha ao carregar os chamados do cockpit");
                 this._renderizarCockpit([]);
 
@@ -4000,14 +4865,18 @@ sap.ui.define([
         },
 
         // ---- Chats ----
-        // "Chats" (sufixo "") e real: chatLista vem dos chamados do requisitante (_montarChatLista)
-        // e abrir um chat reusa o MESMO _carregarChatDoTicket que o card de chat do Detalhe usa -
+        // Todo o estado mora no model "view", declarado no onInit. As DUAS telas agora sao reais -
+        // o mock saiu de cena:
+        // "Chats" (sufixo ""): chatLista vem dos chamados do requisitante (_montarChatLista) e
+        // abrir um chat reusa o MESMO _carregarChatDoTicket que o card de chat do Detalhe usa -
         // ver _selecionarChatReal/_enviarMensagemChatReal.
-        // "Chat com SAP" (sufixo "Sap") continua mock: nao existe API de mensagens do lado SAP
-        // Cloud ALM hoje. As duas telas compartilham handler; o sufixo entra tanto nos ids dos
-        // controles quanto no nome das propriedades do modelo "view", entao cada uma tem lista,
-        // conversa selecionada e mensagens proprias. onChatAcoes e onChatInformacoes ficam sem
-        // variante *Sap de proposito: sao toasts sem estado e os dois fragments apontam para eles.
+        // "Chat com SAP" (sufixo "Sap"): chatListaSap e espelhada dos casos SAP por
+        // _espelharCasosSapNoChat e a conversa vem da ALM - ver _carregarComentariosDoCasoSap/
+        // _enviarComentarioDoChatSap.
+        // As duas telas compartilham handler; o sufixo entra tanto nos ids dos controles quanto no
+        // nome das propriedades do modelo "view", entao cada uma tem lista, conversa selecionada e
+        // mensagens proprias. onChatAcoes e onChatInformacoes ficam sem variante *Sap de proposito:
+        // sao toasts sem estado e os dois fragments apontam para eles.
 
         onChatSelect(oEvent) {
             this._selecionarChat(oEvent, "");
@@ -4035,24 +4904,422 @@ sap.ui.define([
                 return;
             }
 
-            // ---- Chat com SAP (mock) ----
+            // ---- Chat com SAP: a conversa vem da ALM ----
+            // So existem os sufixos "" e "Sap", e o "" ja retornou acima: daqui pra baixo e sempre
+            // o lado SAP. Nao ha mais ramo em memoria - o mock saiu quando a lista passou a ser
+            // espelhada dos casos reais (_espelharCasosSapNoChat).
             const oModel = this.getView().getModel("view");
 
-            // O ciclo do chatCarregando espelha o do chatCarregando do detalhe e existe para a
-            // List da conversa ter onde pendurar o busy. Com as mensagens vindo do mock em
-            // memoria, o true e o false acontecem no mesmo tick e nada aparece na tela - o fio
-            // fica pronto para quando /chatMensagens passar a vir de servico, sem precisar mexer
-            // no fragmento de novo.
-            oModel.setProperty("/chatCarregando" + sSufixo, true);
             oModel.setProperty("/chatSelecionado" + sSufixo, oChat);
-            oModel.setProperty("/chatMensagens" + sSufixo, oChat.mensagens ?? []);
-            oModel.setProperty("/chatCarregando" + sSufixo, false);
 
             // Zera as nao lidas pelo PATH do contexto: a lista pode estar filtrada pelo
             // SearchField, entao o indice visual nao corresponde ao indice do array.
             oModel.setProperty(oContext.getPath() + "/naoLidas", 0);
 
-            this.byId("chatsMensagensScroll" + sSufixo)?.scrollTo(0, 99999, 0);
+            // Quem le os comentarios do caso na ALM e tambem o dono do busy da List.
+            this._carregarComentariosDoCasoSap(oContext.getPath());
+        },
+
+        // Conversa do caso SAP: 1 GET por clique, com cache na propria linha. Recebe o PATH do item
+        // (e nao o objeto) porque a resposta chega depois e a linha pode ter se movido - o path e
+        // reresolvido por ID no retorno, como em _carregarChatDoTicket.
+        _carregarComentariosDoCasoSap(sPathChat) {
+            const oModel = this.getView().getModel("view");
+            const oChat = oModel.getProperty(sPathChat) ?? {};
+            const sId = String(oChat.id ?? "");
+            const sCorrelationId = String(oChat.correlationId ?? "").trim();
+
+            // Contador de geracao, nao comparacao de path: trocar de caso rapido deixaria a resposta
+            // do caso anterior pintar a conversa do novo (mesmo motivo de _iGeracaoCasosChamadoSap).
+            // Incrementa ANTES do teste de cache: a selecao servida da memoria tambem tem de
+            // invalidar a leitura em voo, senao a resposta do caso lento repinta as bolhas do caso
+            // cacheado que o usuario acabou de abrir - com o cabecalho ainda mostrando o outro.
+            this._iGeracaoComentariosCasoSap = (this._iGeracaoComentariosCasoSap || 0) + 1;
+            const iGeracao = this._iGeracaoComentariosCasoSap;
+
+            // Ja lido: serve do cache da linha, que inclui o que o usuario digitou no FeedInput.
+            if (oChat.comentariosCarregados) {
+                // Solta o busy aqui porque o finally da leitura em voo ja esta fora da geracao
+                // corrente e nao vai mais solta-lo - a conversa ficaria sob o indicador ate o GET
+                // do outro caso terminar.
+                oModel.setProperty("/chatCarregandoSap", false);
+                oModel.setProperty("/chatMensagensSap", oChat.mensagens ?? []);
+                this.byId("chatsMensagensScrollSap")?.scrollTo(0, 99999, 0);
+
+                return Promise.resolve(false);
+            }
+
+            // Limpa antes de carregar: senao as bolhas do caso anterior ficam sob o busy.
+            oModel.setProperty("/chatMensagensSap", []);
+
+            if (!sCorrelationId) {
+                // Mesmo motivo do ramo de cache: a geracao ja subiu e o finally da leitura em voo
+                // nao solta mais o busy, que ficaria ligado para sempre nesta coluna.
+                oModel.setProperty("/chatCarregandoSap", false);
+                MessageToast.show(this._getResourceBundle()
+                    .getText("chatsSapCasoSemCorrelationId"));
+
+                return Promise.resolve(false);
+            }
+
+            oModel.setProperty("/chatCarregandoSap", true);
+
+            // Promise memoizada e ja quente (o onInit a consumiu em _carregarChamadosSap): pedir o
+            // S-User de novo nao gera round-trip. Nunca rejeita.
+            return this._lerSUserRequisitante()
+                .then((oResultado) => {
+                    const sSUser = String(oResultado?.sUser ?? "").trim();
+
+                    // Sem S-User a ALM responderia fora de escopo; na pratica nem ha lista, que vem
+                    // da mesma carga que exige o S-User.
+                    if (!sSUser) {
+                        Log.warning("Comentarios do caso " + sCorrelationId
+                            + " ignorados: requisitante sem S-User", null,
+                            "megawork.mwmonitorchamados.controller.Main");
+
+                        return null;
+                    }
+
+                    return this._bolhasDoCasoSap(sCorrelationId, sSUser);
+                })
+                .then((aMensagens) => {
+                    // Clique em outro caso enquanto esta leitura viajava.
+                    if (iGeracao !== this._iGeracaoComentariosCasoSap || !aMensagens) {
+                        return false;
+                    }
+
+                    const sPathAtual = this._pathDoChatPorId(sId, "Sap");
+
+                    if (!sPathAtual) {
+                        return false;
+                    }
+
+                    // Mescla, nao substitui: mensagem digitada no FeedInput durante a leitura (sem
+                    // origemAlm) seria apagada por um setProperty seco.
+                    const aLocais = (oModel.getProperty(sPathAtual + "/mensagens") ?? [])
+                        .filter((oMensagem) => !oMensagem.origemAlm);
+                    const aTudo = aMensagens.concat(aLocais);
+
+                    oModel.setProperty(sPathAtual + "/mensagens", aTudo);
+                    oModel.setProperty(sPathAtual + "/comentariosCarregados", true);
+                    oModel.setProperty("/chatMensagensSap", aTudo);
+
+                    // O scrollTo sincrono de _selecionarChat rolaria a conversa ANTERIOR: o
+                    // setProperty so agenda o render. O timeout 0 cai depois da tarefa de rendering
+                    // do UI5, com as bolhas novas ja no DOM.
+                    window.setTimeout(
+                        () => this.byId("chatsMensagensScrollSap")?.scrollTo(0, 99999, 0), 0);
+
+                    return true;
+                })
+                .catch((oError) => {
+                    Log.error("Falha ao carregar os comentarios do caso SAP " + sCorrelationId,
+                        oError, "megawork.mwmonitorchamados.controller.Main");
+
+                    // O toast so sai se o caso que falhou for o que esta aberto na tela.
+                    if (iGeracao === this._iGeracaoComentariosCasoSap) {
+                        MessageToast.show(this._getResourceBundle()
+                            .getText("chatsSapErroCarregarComentarios"));
+                    }
+
+                    return false;
+                })
+                .finally(() => {
+                    // Soltar o busy fora da geracao corrente apagaria o indicador da leitura nova.
+                    if (iGeracao === this._iGeracaoComentariosCasoSap) {
+                        oModel.setProperty("/chatCarregandoSap", false);
+                    }
+                });
+        },
+
+        // Sem cache (1 GET por abertura, como os campos) e com a guarda de _lerDetalheCasoSap: o
+        // contador _iGeracaoComentariosCasoSap e da lista de conversas, mexer nele mataria a de la.
+        _carregarComentariosDoDetalheSap(sCorrelationId, sSUser) {
+            const oModelo = this._modeloCasoSap();
+
+            // Defensivo: onTicketPressSap ja barra o caso sem correlationId antes de abrir a tela.
+            if (!sCorrelationId) {
+                Log.warning("Comentarios do detalhe SAP ignorados: caso sem correlationId", null,
+                    "megawork.mwmonitorchamados.controller.Main");
+
+                return Promise.resolve(false);
+            }
+
+            oModelo.setProperty("/chatCarregando", true);
+
+            return this._bolhasDoCasoSap(sCorrelationId, sSUser)
+                .then((aBolhas) => {
+                    // Resposta lenta de um caso abandonado pintaria a conversa do caso aberto agora.
+                    if (oModelo.getProperty("/correlationId") !== sCorrelationId) {
+                        return false;
+                    }
+
+                    // Sem payload nao e conversa vazia: calar aqui deixaria a conversa anterior na
+                    // tela depois do refresh, com o toast de sucesso por cima.
+                    if (!aBolhas) {
+                        oModelo.setProperty("/chat", []);
+                        oModelo.setProperty("/chatFalha", true);
+
+                        return false;
+                    }
+
+                    oModelo.setProperty("/chat", aBolhas);
+                    oModelo.setProperty("/chatFalha", false);
+
+                    // O setProperty so agenda o render: o scroll sincrono rolaria a conversa anterior.
+                    window.setTimeout(
+                        () => this.byId("detalheChatScrollSap")?.scrollTo(0, 99999, 0), 0);
+
+                    return true;
+                })
+                .catch((oError) => {
+                    Log.error("Falha ao carregar os comentarios do caso SAP " + sCorrelationId,
+                        oError, "megawork.mwmonitorchamados.controller.Main");
+
+                    if (oModelo.getProperty("/correlationId") !== sCorrelationId) {
+                        return false;
+                    }
+
+                    // Sem toast: a MessageStrip do cartao ja avisa e _lerDetalheCasoSap costuma
+                    // toastar junto (mesma origem) - dois toasts empilhados so atrapalham.
+                    oModelo.setProperty("/chat", []);
+                    oModelo.setProperty("/chatFalha", true);
+
+                    return false;
+                })
+                .finally(() => {
+                    // Resposta obsoleta soltaria o busy da leitura do caso novo, ainda em voo.
+                    if (oModelo.getProperty("/correlationId") === sCorrelationId) {
+                        oModelo.setProperty("/chatCarregando", false);
+                    }
+                });
+        },
+
+        // Envio do detalhe SAP: le tudo do modelo casoSap porque este fragment nao tem bindElement
+        // em tickets - onDetalheEnviarMensagem, que parte do getBindingContext, nao serve aqui.
+        onDetalheSapEnviarMensagem(oEvent) {
+            const sTexto = (oEvent.getParameter("value") || "").trim();
+
+            if (!sTexto) {
+                return;
+            }
+
+            const oModelo = this._modeloCasoSap();
+            const sCorrelationId = String(oModelo.getProperty("/correlationId") ?? "").trim();
+            const oBundle = this._getResourceBundle();
+
+            // Toast, e nao so return: o FeedInput ja limpou o campo e o usuario ficaria sem sinal.
+            if (!sCorrelationId) {
+                MessageToast.show(oBundle.getText("chatsSapCasoSemCorrelationId"));
+
+                return;
+            }
+
+            // Rede de seguranca: o enabled do FeedInput ja barra o segundo clique e o envio durante
+            // a leitura - uma leitura iniciada ANTES do POST volta com um payload sem a mensagem
+            // nova e o setProperty("/chat") seco dela apagaria a bolha ja confirmada.
+            if (oModelo.getProperty("/chatEnviando") === true
+                || oModelo.getProperty("/chatCarregando") === true) {
+                return;
+            }
+
+            // Sem origemAlm de proposito: essa marca so entra na bolha ja confirmada pela ALM, senao
+            // uma releitura concorrente apagaria a mensagem ainda em voo. Quem casa a bolha na volta
+            // (troca ou remocao) e o id, nao a ausencia da marca.
+            const oOtimista = {
+                id: "m" + Date.now(),
+                autor: AUTOR_MENSAGEM_PROPRIA,
+                texto: sTexto,
+                quando: this._agoraIso(),
+                eu: true
+            };
+
+            // Array novo: push in place nao reavalia o binding da List da conversa.
+            oModelo.setProperty("/chat", (oModelo.getProperty("/chat") ?? []).concat([oOtimista]));
+            oModelo.setProperty("/chatEnviando", true);
+
+            // O setProperty so agenda o render: o scroll sincrono rolaria a conversa anterior.
+            window.setTimeout(() => this.byId("detalheChatScrollSap")?.scrollTo(0, 99999, 0), 0);
+
+            // S-User lido no momento do envio, nunca cacheado em campo do controller: o toggle de
+            // e-mail dev troca o requisitante. A promise e memoizada, entao nao ha round-trip extra.
+            this._lerSUserRequisitante()
+                .then((oResultado) => {
+                    const sSUser = String(oResultado?.sUser ?? "").trim();
+
+                    // Voltou e abriu outro caso: mexer no modelo agora pintaria o caso errado.
+                    if (oModelo.getProperty("/correlationId") !== sCorrelationId) {
+                        return null;
+                    }
+
+                    if (!sSUser) {
+                        Log.warning("Comentario do caso " + sCorrelationId
+                            + " nao enviado: requisitante sem S-User", null,
+                            "megawork.mwmonitorchamados.controller.Main");
+
+                        this._removerBolhaDoDetalheSap(oModelo, oOtimista.id);
+                        MessageToast.show(oBundle.getText("chatsSapComentarioSemSUser"));
+
+                        return null;
+                    }
+
+                    return this._enviarComentarioCasoSap(sCorrelationId, sSUser, sTexto);
+                })
+                .then((oResposta) => {
+                    if (!oResposta || oModelo.getProperty("/correlationId") !== sCorrelationId) {
+                        return;
+                    }
+
+                    // Le /chat de novo: um refresh pode ter trocado o array inteiro. O indice
+                    // "e"+timestamp nao colide com os ids <correlationId>c<i> da releitura.
+                    const aChat = oModelo.getProperty("/chat") ?? [];
+                    const iIndice = aChat.findIndex((oMensagem) => oMensagem.id === oOtimista.id);
+
+                    if (iIndice < 0) {
+                        return;
+                    }
+
+                    const aNovo = aChat.slice();
+
+                    aNovo[iIndice] = this._mapearComentarioSapParaChat(oResposta.comentario,
+                        sCorrelationId, "e" + Date.now());
+                    oModelo.setProperty("/chat", aNovo);
+                })
+                .catch((oError) => {
+                    Log.error("Falha ao enviar o comentario ao caso SAP " + sCorrelationId, oError,
+                        "megawork.mwmonitorchamados.controller.Main");
+
+                    if (oModelo.getProperty("/correlationId") !== sCorrelationId) {
+                        return;
+                    }
+
+                    // Rollback, ao contrario do caminho C4C: manter a bolha desenharia uma mensagem
+                    // que a SAP nunca recebeu, e a proxima releitura a apagaria em silencio. Reenvio
+                    // so manual - o CommentPost nao tem chave de deduplicacao e a mensagem pode ter
+                    // sido gravada mesmo com erro na volta.
+                    this._removerBolhaDoDetalheSap(oModelo, oOtimista.id);
+                    MessageToast.show(this._mensagemDeFalhaAoComentarSap(oError));
+                    this.byId("detalheChatFeedInputSap")?.setValue(sTexto);
+                })
+                .finally(() => {
+                    // Soltar a trava fora do caso corrente liberaria o campo do caso aberto agora.
+                    if (oModelo.getProperty("/correlationId") === sCorrelationId) {
+                        oModelo.setProperty("/chatEnviando", false);
+                    }
+                });
+        },
+
+        // Mesma leitura de _falhaAoAbrirCasoSap, e usada pelas duas telas de chat SAP: so 400/428
+        // provam que a ALM recusou ANTES de gravar, e ai o motivo dela e a unica pista acionavel
+        // ("passa de 5000 caracteres", "caso encerrado") - engolir isso deixa o usuario reenviando o
+        // mesmo texto em loop. Timeout e 5xx podem ter gravado, entao seguem com o texto que pede
+        // conferencia antes do reenvio: o POST nao tem chave de deduplicacao.
+        _mensagemDeFalhaAoComentarSap(oError) {
+            const oBundle = this._getResourceBundle();
+            const iStatus = Number(oError?.status ?? 0);
+
+            if (iStatus !== 400 && iStatus !== 428) {
+                return oBundle.getText("chatsSapEnviarComentarioErro");
+            }
+
+            const sManchete = oBundle.getText("chatsSapComentarioRecusado");
+            const sDetalhe = String(oError?.message ?? "").trim();
+
+            return sDetalhe ? sManchete + "\n\n" + sDetalhe : sManchete;
+        },
+
+        // Array novo pelo mesmo motivo do concat do envio: mutar em lugar nao reavalia o binding.
+        _removerBolhaDoDetalheSap(oModelo, sIdBolha) {
+            oModelo.setProperty("/chat", (oModelo.getProperty("/chat") ?? [])
+                .filter((oMensagem) => oMensagem.id !== sIdBolha));
+        },
+
+        // Conversa da ALM sem estado de tela: quem chama e dono do busy, do cache e do erro.
+        _bolhasDoCasoSap(sCorrelationId, sSUser) {
+            return this._lerComentariosCasoSap(sCorrelationId, sSUser)
+                .then((oComentarios) => {
+                    // null, e nao []: sem payload o chamador nao tem o que pintar, e isso nao e o
+                    // mesmo que uma conversa vazia.
+                    if (!oComentarios) {
+                        return null;
+                    }
+
+                    // Truncamento e fato do backend (limit 200): sem o aviso a tela afirma
+                    // silenciosamente que o caso tem menos comentario do que tem.
+                    if (oComentarios.truncado === true) {
+                        Log.warning("Caso " + sCorrelationId + ": " + oComentarios.total
+                            + " comentarios na ALM, a conversa mostra " + oComentarios.exibidos,
+                            null, "megawork.mwmonitorchamados.controller.Main");
+                    }
+
+                    return (oComentarios.comentarios ?? [])
+                        .map((oComentario, iIndice) =>
+                            this._mapearComentarioSapParaChat(oComentario, sCorrelationId, iIndice))
+                        // Sem sorter nas Lists e sem ordem garantida pelo endpoint; data ilegivel
+                        // vira "" e subiria ao topo, entao cai no fim na ordem que a ALM mandou.
+                        .sort((oA, oB) => (oA.quando ? 0 : 1) - (oB.quando ? 0 : 1)
+                            || oA.quando.localeCompare(oB.quando));
+                });
+        },
+
+        // $direct como as outras leituras SAP: o detalhe dispara esta function no MESMO tick de
+        // DetalheCasoSap, e sem isso a conversa entraria no $batch do C4C em vez de ir sozinha.
+        _lerComentariosCasoSap(sCorrelationId, sSUser) {
+            const oOperation = this.getOwnerComponent().getModel()
+                .bindContext("/ComentariosCasoSap(...)", null, { $$groupId: "$direct" });
+
+            oOperation.setParameter("correlationId", sCorrelationId);
+            oOperation.setParameter("sUser", sSUser);
+
+            return oOperation.invoke()
+                .then(() => oOperation.getBoundContext().requestObject())
+                .finally(() => oOperation.destroy());
+        },
+
+        // Envia UMA mensagem ao caso e devolve o comentario ja no formato do GET. Sem estado de
+        // tela: quem chama e dono do busy, da bolha e do erro (mesmo contrato de _bolhasDoCasoSap).
+        // $direct como as outras chamadas SAP: sem isso a escrita entraria no $batch do C4C.
+        _enviarComentarioCasoSap(sCorrelationId, sSUser, sTexto) {
+            const oOperation = this.getOwnerComponent().getModel()
+                .bindContext("/EnviarComentarioCasoSap(...)", null, { $$groupId: "$direct" });
+
+            oOperation.setParameter("correlationId", sCorrelationId);
+            oOperation.setParameter("sUser", sSUser);
+            oOperation.setParameter("texto", sTexto);
+
+            return oOperation.invoke()
+                .then(() => oOperation.getBoundContext().requestObject())
+                .finally(() => oOperation.destroy());
+        },
+
+        // origemAlm marca a bolha vinda do backend: e por essa marca que a releitura sabe o que pode
+        // substituir e o que e local do FeedInput (espelha o origemC4C do detalhe).
+        _mapearComentarioSapParaChat(oComentario, sCorrelationId, iIndice) {
+            const sBruto = String(oComentario.quando ?? "").trim();
+
+            // A ALM manda "2021-06-01 12:00:00" em UTC: sem o T o parse fica por conta de extensao
+            // do engine e sem o Z o new Date leria como hora local, jogando a bolha 3 h no futuro em
+            // UTC-3. Fora desse formato o valor vai cru, e _paraIsoLocal - o unico produtor de data
+            // do modelo - devolve "" no que new Date nao entende.
+            const sQuando = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(sBruto)
+                ? sBruto.replace(" ", "T") + "Z"
+                : sBruto;
+
+            return {
+                id: sCorrelationId + "c" + iIndice,
+                // A ALM so devolve o S-User do autor; nome de pessoa nao existe neste endpoint.
+                autor: String(oComentario.autor ?? "").trim()
+                    || this._getResourceBundle().getText("chatsSapAutorDesconhecido"),
+                texto: String(oComentario.texto ?? "").trim(),
+                quando: this._paraIsoLocal(sQuando),
+                // Direcao pelo type, nunca por createdBy: o colega da mesma empresa comenta com
+                // OUTRO S-User, e cruzar com o S-User da tela mandaria a mensagem dele para a
+                // esquerda com o avatar de cliente, como se a SAP tivesse escrito. Vazio ou
+                // desconhecido cai em false: dizer que a SAP escreveu erra menos do que assinar
+                // no nosso nome.
+                eu: String(oComentario.tipo ?? "").trim() === TIPO_COMENTARIO_CLIENTE_SAP,
+                origemAlm: true
+            };
         },
 
         // "Chats" (C4C): resolve a linha real do ticket pelo ID e reusa _carregarChatDoTicket (o
@@ -4152,7 +5419,7 @@ sap.ui.define([
 
         // Handler do post do FeedInput da barra de envio, igual ao onDetalheEnviarMensagem: o
         // texto vem no parametro "value" do evento, e nao de um campo lido por ID - o FeedInput
-        // limpa o proprio value depois de postar, por isso aqui nao se zera campo nenhum.
+        // limpa o proprio value depois de postar, e so a falha do POST na ALM repoe o texto la.
         onChatEnviarMensagem(oEvent) {
             this._enviarMensagemDoChat(oEvent, "");
         },
@@ -4175,6 +5442,9 @@ sap.ui.define([
                 return;
             }
 
+            // Mesma bifurcacao de _selecionarChat, e agora os DOIS ramos falam com backend: "" vai
+            // ao C4C (mesma trilha do card de chat do Detalhe) e "Sap" vai a ALM. Nao sobra caminho
+            // em memoria aqui - a bolha otimista de cada lado e responsabilidade do metodo chamado.
             if (sSufixo === "") {
                 // Rede de seguranca: o enabled do FeedInput ja bloqueia chamado encerrado (mesmo
                 // formatter.chamadoEncerrado do DetalheChamado, onDetalheEnviarMensagem). O toast
@@ -4187,20 +5457,19 @@ sap.ui.define([
                 }
 
                 this._enviarMensagemChatReal(oChat, sTexto);
+
                 return;
             }
 
-            // ---- Chat com SAP (mock) ----
-            const oMensagem = {
-                id: "m" + Date.now(),
-                autor: AUTOR_MENSAGEM_PROPRIA,
-                texto: sTexto,
-                quando: this._agoraIso(),
-                eu: true
-            };
+            this._enviarComentarioDoChatSap(oChat, sTexto);
+        },
 
+        // Extraido porque o caminho SAP precisa do mesmo anexo ANTES do POST (bolha otimista).
+        _anexarMensagemNoChat(sSufixo, oChat, oMensagem) {
+            const oModel = this.getView().getModel("view");
             // Array novo: push in place nao reavalia o binding da List de mensagens.
-            const aMensagens = (oModel.getProperty("/chatMensagens" + sSufixo) ?? []).concat([oMensagem]);
+            const aMensagens = (oModel.getProperty("/chatMensagens" + sSufixo) ?? [])
+                .concat([oMensagem]);
 
             oModel.setProperty("/chatMensagens" + sSufixo, aMensagens);
 
@@ -4209,11 +5478,164 @@ sap.ui.define([
 
             if (sPath) {
                 oModel.setProperty(sPath + "/mensagens", aMensagens);
-                oModel.setProperty(sPath + "/ultimaMensagem", sTexto);
+                oModel.setProperty(sPath + "/ultimaMensagem", oMensagem.texto);
                 oModel.setProperty(sPath + "/dataHora", oMensagem.quando);
             }
 
-            this.byId("chatsMensagensScroll" + sSufixo)?.scrollTo(0, 99999, 0);
+            // O setProperty so agenda o render: o scroll sincrono rolaria com a altura ANTERIOR e
+            // deixaria a bolha recem-anexada fora da area visivel. Mesmo timeout 0 do detalhe SAP.
+            window.setTimeout(
+                () => this.byId("chatsMensagensScroll" + sSufixo)?.scrollTo(0, 99999, 0), 0);
+        },
+
+        // Envio da conversa SAP: mesmo contrato de _carregarComentariosDoCasoSap - este metodo e o
+        // dono do busy, da bolha e do erro.
+        _enviarComentarioDoChatSap(oChat, sTexto) {
+            const oModel = this.getView().getModel("view");
+            const oBundle = this._getResourceBundle();
+            const sCorrelationId = String(oChat.correlationId ?? "").trim();
+
+            // Antes de pintar a bolha: pintada e removida em seguida, ela piscaria sem motivo.
+            if (!sCorrelationId) {
+                MessageToast.show(oBundle.getText("chatsSapCasoSemCorrelationId"));
+
+                return;
+            }
+
+            // Rede de seguranca: o enabled do FeedInput ja barra o segundo clique e o envio durante
+            // a leitura - uma leitura iniciada ANTES do POST volta sem a mensagem nova, e a mescla
+            // de _carregarComentariosDoCasoSap descartaria a bolha ja confirmada (tem origemAlm) ou
+            // duplicaria a otimista se a ALM tivesse indexado o comentario a tempo.
+            if (oModel.getProperty("/chatEnviandoSap") === true
+                || oModel.getProperty("/chatCarregandoSap") === true) {
+                return;
+            }
+
+            // Sem origemAlm de proposito: a mescla de _carregarComentariosDoCasoSap so preserva as
+            // bolhas sem essa marca, e uma releitura concorrente apagaria a mensagem ainda em voo.
+            // Quem casa a bolha na volta (troca ou remocao) e o id.
+            const oOtimista = {
+                id: "m" + Date.now(),
+                autor: AUTOR_MENSAGEM_PROPRIA,
+                texto: sTexto,
+                quando: this._agoraIso(),
+                eu: true
+            };
+
+            // Previa guardada antes do eco otimista: ela nasce com o assunto do caso, e recalcula-la
+            // no rollback deixaria a linha em branco num caso ainda sem comentario.
+            const sPathLinha = this._pathDoChatPorId(oChat.id, "Sap");
+            const oPreviaAnterior = sPathLinha ? {
+                texto: oModel.getProperty(sPathLinha + "/ultimaMensagem") ?? "",
+                quando: oModel.getProperty(sPathLinha + "/dataHora") ?? ""
+            } : null;
+
+            this._anexarMensagemNoChat("Sap", oChat, oOtimista);
+            oModel.setProperty("/chatEnviandoSap", true);
+
+            // Mesma promise memoizada e ja quente da leitura da conversa: nao gera round-trip e
+            // nunca rejeita.
+            this._lerSUserRequisitante()
+                .then((oResultado) => {
+                    const sSUser = String(oResultado?.sUser ?? "").trim();
+
+                    // Sem S-User a ALM recusaria o POST (reporter e required no envio).
+                    if (!sSUser) {
+                        Log.warning("Comentario do caso " + sCorrelationId
+                            + " nao enviado: requisitante sem S-User", null,
+                            "megawork.mwmonitorchamados.controller.Main");
+
+                        this._substituirMensagemNoChatSap(oChat, oOtimista.id, null,
+                            oPreviaAnterior);
+                        MessageToast.show(oBundle.getText("chatsSapComentarioSemSUser"));
+
+                        return null;
+                    }
+
+                    return this._enviarComentarioCasoSap(sCorrelationId, sSUser, sTexto);
+                })
+                .then((oResposta) => {
+                    if (!oResposta) {
+                        return;
+                    }
+
+                    // O indice "e"+timestamp nao colide com os ids <correlationId>c<i> que a
+                    // releitura gera; a bolha nova ja nasce com origemAlm, entao a proxima leitura
+                    // a substitui em vez de duplicar.
+                    this._substituirMensagemNoChatSap(oChat, oOtimista.id,
+                        this._mapearComentarioSapParaChat(oResposta.comentario, sCorrelationId,
+                            "e" + Date.now()));
+                })
+                .catch((oError) => {
+                    Log.error("Falha ao enviar o comentario ao caso SAP " + sCorrelationId, oError,
+                        "megawork.mwmonitorchamados.controller.Main");
+
+                    // Rollback, ao contrario do caminho C4C: manter a bolha desenharia uma mensagem
+                    // que a SAP nunca recebeu, e a releitura a apagaria em silencio depois. Reenvio
+                    // so manual - o POST nao tem chave de deduplicacao e a mensagem pode ter sido
+                    // gravada mesmo com erro na volta. Roda fora da guarda de conversa: casa por
+                    // path re-resolvido, entao acerta a linha mesmo com outro caso aberto.
+                    this._substituirMensagemNoChatSap(oChat, oOtimista.id, null, oPreviaAnterior);
+
+                    // Ja dentro da guarda: o FeedInput e UNICO na tela. Repor o texto do caso A no
+                    // campo de outra conversa faria o proximo clique em enviar gravar a mensagem no
+                    // caso errado - escrita real e sem volta, a ALM nao apaga comentario.
+                    if (oModel.getProperty("/chatSelecionadoSap")?.id !== oChat.id) {
+                        return;
+                    }
+
+                    MessageToast.show(this._mensagemDeFalhaAoComentarSap(oError));
+
+                    // Seguro aqui: este callback e assincrono, ja depois do setValue("") interno
+                    // que o FeedInput faz ao postar.
+                    this.byId("chatsFeedInputSap")?.setValue(sTexto);
+                })
+                .finally(() => {
+                    oModel.setProperty("/chatEnviandoSap", false);
+                });
+        },
+
+        // oNova null remove a bolha (rollback). Casa por ID, e nao por texto como
+        // _substituirMensagemLocalPorC4C: duas mensagens iguais em sequencia trocariam a errada.
+        _substituirMensagemNoChatSap(oChat, sIdLocal, oNova, oPreviaAnterior) {
+            const oModel = this.getView().getModel("view");
+            // Path re-resolvido na volta: a lista pode ter sido filtrada ou reordenada durante o POST.
+            const sPath = this._pathDoChatPorId(oChat.id, "Sap");
+
+            if (!sPath) {
+                return;
+            }
+
+            // Cache da linha e a fonte de verdade: e ele que a proxima selecao serve.
+            const aMensagens = (oModel.getProperty(sPath + "/mensagens") ?? []).slice();
+            const iIndice = aMensagens.findIndex((oMensagem) => oMensagem.id === sIdLocal);
+
+            if (iIndice < 0) {
+                return;
+            }
+
+            if (oNova) {
+                aMensagens[iIndice] = oNova;
+            } else {
+                aMensagens.splice(iIndice, 1);
+
+                // Repoe a previa de antes do envio, e nao a ultima bolha restante: sem comentario
+                // nenhum a segunda linha da lista e o assunto do caso, que o recalculo apagaria.
+                const oUltima = aMensagens[aMensagens.length - 1];
+
+                oModel.setProperty(sPath + "/ultimaMensagem",
+                    oPreviaAnterior?.texto ?? oUltima?.texto ?? "");
+                oModel.setProperty(sPath + "/dataHora",
+                    oPreviaAnterior?.quando ?? oUltima?.quando ?? "");
+            }
+
+            oModel.setProperty(sPath + "/mensagens", aMensagens);
+
+            // A coluna visivel so muda se a conversa aberta ainda for esta: trocar de caso durante o
+            // POST e escrever aqui pintaria bolha no caso errado.
+            if (oModel.getProperty("/chatSelecionadoSap")?.id === oChat.id) {
+                oModel.setProperty("/chatMensagensSap", aMensagens);
+            }
         },
 
         // "Chats" (C4C): mesmo envio que onDetalheEnviarMensagem usa (_enviarMensagemAoC4C +
@@ -4306,156 +5728,6 @@ sap.ui.define([
             const iIndice = aChats.findIndex((oChat) => oChat.id === sId);
 
             return iIndice < 0 ? null : sLista + "/" + iIndice;
-        },
-
-        // Devolve um ARRAY NOVO a cada chamada (literal montado aqui dentro, sem constante de
-        // modulo compartilhada): uma constante seria a MESMA referencia em toda recarga do
-        // modelo, e as escritas do chat vazariam entre elas - mesma pegadinha de
-        // NOVO_CHAMADO_DEFAULTS/_resetNovoChamado.
-        // Forma do chat:     { id, nome, departamento, ultimaMensagem, dataHora, naoLidas, mensagens }
-        // Forma da mensagem: { id, autor, texto, quando, eu } - os mesmos nomes do chat do
-        // DetalheChamado, para o markup e formatter.dataAbertura serem identicos.
-        _criarChatsMock() {
-            return [{
-                id: "c1",
-                nome: "Suporte N1",
-                departamento: "Infraestrutura",
-                ultimaMensagem: "Consegue tentar acessar de novo e confirmar?",
-                dataHora: "2026-08-12T09:41:00",
-                naoLidas: 2,
-                mensagens: [{
-                    id: "c1m1",
-                    autor: "Suporte N1",
-                    texto: "Bom dia! Recebemos o alerta de indisponibilidade do servidor de arquivos.",
-                    quando: "2026-08-12T08:52:00",
-                    eu: false
-                }, {
-                    id: "c1m2",
-                    autor: AUTOR_MENSAGEM_PROPRIA,
-                    texto: "Bom dia. Aqui na filial ninguem consegue abrir a pasta compartilhada desde ontem à noite.",
-                    quando: "2026-08-12T09:03:00",
-                    eu: true
-                }, {
-                    id: "c1m3",
-                    autor: "Suporte N1",
-                    texto: "Obrigado pelo retorno. Identificamos que o serviço de compartilhamento caiu durante a "
-                        + "janela de manutenção da madrugada e o reinício automático falhou por falta de espaço em "
-                        + "disco no volume de logs. Já liberamos espaço, subimos o serviço novamente e estamos "
-                        + "monitorando o consumo pelas próximas horas para garantir que não volte a acontecer.",
-                    quando: "2026-08-12T09:28:00",
-                    eu: false
-                }, {
-                    id: "c1m4",
-                    autor: "Suporte N1",
-                    texto: "Consegue tentar acessar de novo e confirmar?",
-                    quando: "2026-08-12T09:41:00",
-                    eu: false
-                }]
-            }, {
-                id: "c2",
-                nome: "Financeiro",
-                departamento: "Contas a pagar",
-                ultimaMensagem: "A nota fiscal entrou na programação desta sexta.",
-                dataHora: "2026-08-12T08:15:00",
-                naoLidas: 1,
-                mensagens: [{
-                    id: "c2m1",
-                    autor: AUTOR_MENSAGEM_PROPRIA,
-                    texto: "Oi, consegue verificar o status do pagamento do fornecedor Delta?",
-                    quando: "2026-08-11T16:40:00",
-                    eu: true
-                }, {
-                    id: "c2m2",
-                    autor: "Financeiro",
-                    texto: "Verifico sim. O documento está em aprovação com a gerência.",
-                    quando: "2026-08-11T17:05:00",
-                    eu: false
-                }, {
-                    id: "c2m3",
-                    autor: "Financeiro",
-                    texto: "A nota fiscal entrou na programação desta sexta.",
-                    quando: "2026-08-12T08:15:00",
-                    eu: false
-                }]
-            }, {
-                id: "c3",
-                nome: "Ana Paula Souza",
-                departamento: "Recursos Humanos",
-                ultimaMensagem: "Perfeito, obrigado pelo envio!",
-                dataHora: "2026-08-11T17:52:00",
-                naoLidas: 0,
-                mensagens: [{
-                    id: "c3m1",
-                    autor: "Ana Paula Souza",
-                    texto: "Boa tarde! Preciso do comprovante de horas do mês passado.",
-                    quando: "2026-08-11T15:12:00",
-                    eu: false
-                }, {
-                    id: "c3m2",
-                    autor: AUTOR_MENSAGEM_PROPRIA,
-                    texto: "Boa tarde, Ana. Acabei de anexar o relatório no chamado 8801.",
-                    quando: "2026-08-11T17:30:00",
-                    eu: true
-                }, {
-                    id: "c3m3",
-                    autor: "Ana Paula Souza",
-                    texto: "Perfeito, obrigado pelo envio!",
-                    quando: "2026-08-11T17:52:00",
-                    eu: false
-                }]
-            }, {
-                id: "c4",
-                nome: "Time de Integrações",
-                departamento: "TI",
-                ultimaMensagem: "Vamos reprocessar a fila hoje à noite.",
-                dataHora: "2026-08-11T14:30:00",
-                naoLidas: 0,
-                mensagens: [{
-                    id: "c4m1",
-                    autor: AUTOR_MENSAGEM_PROPRIA,
-                    texto: "Pessoal, a integração de pedidos parou de gravar por volta das 11h.",
-                    quando: "2026-08-11T11:48:00",
-                    eu: true
-                }, {
-                    id: "c4m2",
-                    autor: "Time de Integrações",
-                    texto: "Confirmado. O certificado do middleware venceu e derrubou a autenticação.",
-                    quando: "2026-08-11T12:22:00",
-                    eu: false
-                }, {
-                    id: "c4m3",
-                    autor: AUTOR_MENSAGEM_PROPRIA,
-                    texto: "Tem previsão para normalizar?",
-                    quando: "2026-08-11T13:10:00",
-                    eu: true
-                }, {
-                    id: "c4m4",
-                    autor: "Time de Integrações",
-                    texto: "Vamos reprocessar a fila hoje à noite.",
-                    quando: "2026-08-11T14:30:00",
-                    eu: false
-                }]
-            }, {
-                id: "c5",
-                nome: "Central de Atendimento",
-                departamento: "Qualidade",
-                ultimaMensagem: "Pesquisa de satisfação respondida, obrigado.",
-                dataHora: "2026-08-10T16:05:00",
-                naoLidas: 0,
-                mensagens: [{
-                    id: "c5m1",
-                    autor: "Central de Atendimento",
-                    texto: "Olá! Poderia avaliar o atendimento do chamado 8790?",
-                    quando: "2026-08-10T14:20:00",
-                    eu: false
-                }, {
-                    id: "c5m2",
-                    autor: AUTOR_MENSAGEM_PROPRIA,
-                    texto: "Pesquisa de satisfação respondida, obrigado.",
-                    quando: "2026-08-10T16:05:00",
-                    eu: true
-                }]
-            }];
         }
     });
 });
