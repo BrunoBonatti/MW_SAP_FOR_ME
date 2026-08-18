@@ -21,8 +21,14 @@
   "cds": {
     "requires": {
       "[production]": {
-        "auth": "xsuaa",
-        "db": false
+        "auth": "xsuaa"
+      },
+      "db": {
+        "//": "Sem isto o @cap-js/sqlite usa ':memory:' em dev: cada restart do cds watch recria o banco do zero e apaga ChatVisualizacoes, fazendo toda notificacao de chat voltar a 'nao visualizada'. Arquivo em disco sobrevive ao restart; *.sqlite ja esta no .gitignore. So [development] - producao continua auto-detectando HANA (HDI container do mta.yaml) sem isto interferir.",
+        "[development]": {
+          "kind": "sqlite",
+          "credentials": { "url": "db/mw-monitor-chamados.sqlite" }
+        }
       },
       "kinds": {
         "c4c": {

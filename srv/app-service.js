@@ -3,6 +3,12 @@ const cds = require("@sap/cds");
 const LOG = cds.log("app-service");
 
 const EMAIL_CONTATO_DEV = "Thor.boantti@test.com.br";
+// Nome totalmente qualificado (db/schema.cds): passado como STRING para SELECT/UPSERT porque a
+// entidade e local (persistida), nao exposta em nenhuma projection da IntegrationService.
+const CHAT_VISUALIZACOES = "megawork.mwmonitorchamados.ChatVisualizacoes";
+// Mesmo par que Main.controller.js usa para decidir "e mensagem de chat" (TYPE_CODES_CHAT_C4C
+// menos a descricao 10004): 10007 = Reply to Customer, 10008 = Reply from Customer.
+const TYPE_CODES_MENSAGEM_CHAT = ["10007", "10008"];
 const TYPE_CODE_DESCRICAO = "10004";
 const STATUS_INICIAL_CHAMADO = "Z6";
 
@@ -92,6 +98,10 @@ const MAXIMO_PAGINAS_CHAMADOS_C4C = 40;
 // 40 GETs em serie ja arriscam o timeout do approuter: acima disso devolve truncado.
 const MAXIMO_TOTAL_CHAMADOS_C4C = 20000;
 
+// Lotes em serie levavam ~6 min: a latencia da ALM por chamada e que domina, nao a CPU.
+// Sobreviveu a remocao do handler ChamadosSap: ChamadosComMensagemNova usa o mesmo knob de 429.
+const LOTES_SIMULTANEOS_CHAMADOS_SAP = Number(process.env.SAP_LOTES_SIMULTANEOS || 6);
+
 // Env propria: SAP_LOTES_SIMULTANEOS e o knob do 429 da ALM, este e do C4C, que tem outro limite.
 // || fora do Number: env nao numerica daria NaN e Array.from({length: NaN}) zeraria os lotes.
 const LOTES_SIMULTANEOS_CLIENTES_C4C = Number(process.env.SAP_LOTES_SIMULTANEOS_CLIENTES) || 4;
@@ -159,6 +169,16 @@ function textoSimplesDoHtml(valor) {
         .replace(/\n{3,}/g, "\n\n")
         .trim();
 }
+
+// Pool de concorrencia generico: "quantos" workers (limitados por iLimite) disputam trabalho
+// chamando "trabalhador" repetidas vezes ate o chamador decidir que acabou (o proprio
+// trabalhador controla o fim, tipicamente consumindo de um indice/fila compartilhados).
+// Nasceu dentro do handler ChamadosSap, que saiu daqui; hoje e o pool das duas varreduras que
+// sobraram - ChamadosComMensagemNova (interacao por chamado) e ClientesDistintosChamados
+// (BusinessPartnerCollection por lote). Cada chamador passa o SEU teto no iLimite, porque os
+// limites de 429 da ALM e do C4C sao independentes (SAP_LOTES_SIMULTANEOS x ..._CLIENTES).
+const emParalelo = (iLimite, quantos, trabalhador) =>
+    Promise.all(Array.from({ length: Math.max(1, Math.min(iLimite, quantos)) }, trabalhador));
 
 function linhasDaResposta(resposta) {
     if (Array.isArray(resposta)) return resposta;
@@ -446,6 +466,12 @@ module.exports = cds.service.impl(async function () {
     // c4codataapi sem model: BusinessPartnerCollection nao esta em nenhum EDMX importado, entao
     // o z_customer_number_KUT so e alcancavel por send() cru.
     const c4cService = await cds.connect.to("c4c");
+    // Unica entidade LOCAL (persistida) do servico: ChatVisualizacoes, db/schema.cds. Resolvida
+    // via connect.to("db") + .run(), no mesmo estilo dos servicos remotos acima, e nao com
+    // SELECT/UPSERT soltos - estes dependem de globals que `cds run`/`cds watch` (via cds-dk)
+    // podem nao amarrar a conexao certa quando ha uma copia aninhada de @sap/cds em
+    // node_modules/@sap/cds-dk/node_modules (MEDIDO: "no primary database is connected").
+    const dbService = await cds.connect.to("db");
 
     let promessaCalmItsm;
     const conectarCalmItsm = () => {
@@ -964,6 +990,127 @@ module.exports = cds.service.impl(async function () {
             .filter((interacao) => interacao.texto);
 
         return { interacoes };
+    });
+
+    // Sustentam a notificacao de mensagem nova em Chats/sino (Main.controller.js,
+    // _verificarNotificacoesChats): so guardam quando o requisitante abriu o chat de cada
+    // chamado pela ultima vez, nunca mensagem nenhuma - as mensagens continuam vindo do C4C
+    // (ServiceRequestTextCollection/InteracoesDoChamado) toda vez que o chat e aberto.
+    this.on("ChamadosComMensagemNova", async (req) => {
+        const emailInformado = (req.data.email || "").trim();
+        const emailLogado = (req.user && req.user.attr && req.user.attr.email) || "";
+        const email = emailInformado || emailLogado || EMAIL_CONTATO_DEV;
+
+        const aChamados = Array.isArray(req.data.chamados) ? req.data.chamados : [];
+        if (!aChamados.length) {
+            return { ticketIds: [] };
+        }
+
+        const aVisualizacoes = await dbService.run(
+            SELECT.from(CHAT_VISUALIZACOES).where({ usuario: email })
+        );
+        const mVisualizadoEm = new Map(aVisualizacoes.map((linha) => [linha.ticketId, linha.visualizadoEm]));
+
+        // Nunca visualizado = notifica direto, sem gastar chamada nenhuma no C4C pra ele.
+        const aTicketIds = aChamados
+            .filter((oChamado) => !mVisualizadoEm.has(String(oChamado.ticketId || "")))
+            .map((oChamado) => String(oChamado.ticketId || ""))
+            .filter(Boolean);
+
+        // Ja visualizados: um por um (nao em lote). Tentei um filtro OR de ParentObjectID pra
+        // checar todos numa chamada so, mas MEDIDO contra o tenant que o parser do C4C e
+        // instavel com OR de 2+ valores: as vezes devolve VAZIO sem erro (silenciosamente
+        // ignorando candidatos validos - pior que lento, e ERRADO, o mesmo tipo de bug que
+        // reverteu a tentativa anterior) e as vezes rejeita com "Ungultigen Token", dependendo
+        // do valor. So a checagem POR CHAMADO (uma unica igualdade no filtro, sem OR nenhum) se
+        // mostrou estavel em todos os testes. Por isso nota e interacao sao checadas juntas, uma
+        // chamada de cada por candidato, em paralelo com o mesmo limite de concorrencia que
+        // ChamadosSap ja usa pra nao martelar o C4C.
+        const aCandidatos = aChamados
+            .filter((oChamado) => mVisualizadoEm.has(String(oChamado.ticketId || "")))
+            .map((oChamado) => ({
+                ticketId: String(oChamado.ticketId || ""),
+                objectID: String(oChamado.objectID || ""),
+                visualizadoEm: mVisualizadoEm.get(String(oChamado.ticketId || ""))
+            }))
+            .filter((oCand) => oCand.objectID);
+
+        if (aCandidatos.length) {
+            const sFiltroTypeCode = TYPE_CODES_MENSAGEM_CHAT
+                .map((sTypeCode) => `TypeCode eq '${sTypeCode}'`)
+                .join(" or ");
+
+            let iProximo = 0;
+
+            await emParalelo(LOTES_SIMULTANEOS_CHAMADOS_SAP, aCandidatos.length, async () => {
+                while (iProximo < aCandidatos.length) {
+                    const oCand = aCandidatos[iProximo];
+                    iProximo += 1;
+
+                    const sObjectID = oCand.objectID.replace(/'/g, "''");
+                    const sData = new Date(oCand.visualizadoEm).toISOString();
+
+                    // Nota: TypeCode 10007/10008 (mesmo par que o app usa pra enviar mensagem).
+                    let bNotaNova = false;
+                    try {
+                        const aNotas = linhasDaResposta(await ticketService.send({
+                            method: "GET",
+                            path: "/ServiceRequestTextCollectionCollection?$filter="
+                                + encodeURIComponent(`(${sFiltroTypeCode}) and ParentObjectID eq '${sObjectID}' `
+                                    + `and CreatedOn gt datetimeoffset'${sData}'`)
+                                + "&$top=1&$select=ParentObjectID&$format=json",
+                            headers: { Accept: "application/json" }
+                        }));
+                        bNotaNova = aNotas.length > 0;
+                    } catch (erro) {
+                        LOG.warn(`Falha ao checar nota nova do chamado ${oCand.ticketId}: ${erro.message}`);
+                    }
+
+                    if (bNotaNova) {
+                        aTicketIds.push(oCand.ticketId);
+                        continue;
+                    }
+
+                    // Interacao: mensagem digitada direto no Sales Cloud, que NAO vira nota - so
+                    // checada quando nao ha nota nova, pra nao gastar a segunda chamada a toa.
+                    try {
+                        const aInteracoesNovas = linhasDaResposta(await interactionService.send({
+                            method: "GET",
+                            path: `/ServiceRequestInteractionTicketCollection('${sObjectID}')`
+                                + "/ServiceRequestInteractionInteractions?$filter="
+                                + encodeURIComponent(`CreationDateTime gt datetimeoffset'${sData}'`)
+                                + "&$top=1&$select=ObjectID&$format=json",
+                            headers: { Accept: "application/json" }
+                        }));
+
+                        if (aInteracoesNovas.length) {
+                            aTicketIds.push(oCand.ticketId);
+                        }
+                    } catch (erro) {
+                        // Falha ISOLADA: so este chamado fica sem checagem de interacao nesta
+                        // rodada, os demais e o resultado geral seguem intactos.
+                        LOG.warn(`Falha ao checar interacao nova do chamado ${oCand.ticketId}: ${erro.message}`);
+                    }
+                }
+            });
+        }
+
+        return { ticketIds: aTicketIds };
+    });
+
+    this.on("MarcarChatVisualizado", async (req) => {
+        const emailInformado = (req.data.email || "").trim();
+        const emailLogado = (req.user && req.user.attr && req.user.attr.email) || "";
+        const email = emailInformado || emailLogado || EMAIL_CONTATO_DEV;
+        const ticketId = String(req.data.ticketId || "").trim();
+
+        if (!email || !ticketId) {
+            return req.reject(400, "ticketId é obrigatório.");
+        }
+
+        await dbService.run(UPSERT.into(CHAT_VISUALIZACOES).entries({ usuario: email, ticketId }));
+
+        return true;
     });
 
     this.on("ComponentesSap", async (req) => {
@@ -1954,12 +2101,6 @@ module.exports = cds.service.impl(async function () {
         // sozinho no erro deixa o C4C do tenant decidir o teto, em vez de um numero chutado aqui.
         let tamanhoLote = MAXIMO_PARCEIROS_POR_LOTE_SAP;
 
-        const emParalelo = (quantos, trabalhador) =>
-            Promise.all(Array.from(
-                { length: Math.max(1, Math.min(LOTES_SIMULTANEOS_CLIENTES_C4C, quantos)) },
-                trabalhador
-            ));
-
         const resolverLote = async (lote) => {
             if (abortado || !lote.length) return;
 
@@ -2011,7 +2152,7 @@ module.exports = cds.service.impl(async function () {
 
         // Cursor e nao lotes pre-fatiados: o que ainda nao saiu nasce no tamanho ja aprendido.
         let proximoParceiro = 0;
-        await emParalelo(parceiros.length, async () => {
+        await emParalelo(LOTES_SIMULTANEOS_CLIENTES_C4C, parceiros.length, async () => {
             while (proximoParceiro < parceiros.length && !abortado) {
                 const inicio = proximoParceiro;
                 proximoParceiro = Math.min(parceiros.length, inicio + tamanhoLote);

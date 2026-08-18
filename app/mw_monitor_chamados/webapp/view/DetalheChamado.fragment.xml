@@ -233,7 +233,8 @@
                                         text="Abrir chamado SAP"
                                         icon="sap-icon://sap-logo-shape"
                                         type="Emphasized"
-                                        press=".onDetalheAbrirChamadoSap"/>
+                                        press=".onDetalheAbrirChamadoSap"
+                                        visible="{= ${view>/requisitanteEhFuncionario} }"/>
                                 </VBox>
                             </VBox>
                         </f:content>

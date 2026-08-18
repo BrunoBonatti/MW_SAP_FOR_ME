@@ -105,6 +105,23 @@ service IntegrationService {
 
   function InteracoesDoChamado(objectID : String) returns { interacoes : array of InteracaoChamado };
 
+  type ChamadoParaChecar {
+    ticketId : String;
+    objectID : String;
+  }
+
+  // "action", nao "function": um parametro Collection(ComplexType) nao da pra codificar numa URL
+  // GET (o jeito que function exige no OData V4) - action manda o corpo em POST, que suporta
+  // isso. Sem efeito colateral (so leitura), mas o formato do parametro obriga essa escolha.
+  // So NOTAS (ServiceRequestTextCollection) - interacoes nao tem campo de volta pro chamado na
+  // entidade plana (ServiceRequestInteractionInteractionsCollection), entao nao da pra checar em
+  // lote. Devolve so os ticketIds com nota nova (TypeCode 10007/10008) desde a ultima
+  // visualizacao guardada em ChatVisualizacoes (db/schema.cds), ou nunca visualizados.
+  action ChamadosComMensagemNova(email : String, chamados : array of ChamadoParaChecar)
+    returns { ticketIds : array of String };
+
+  action MarcarChatVisualizado(email : String, ticketId : String) returns Boolean;
+
   type ComponenteSap {
     id        : String;
     chave     : String;
