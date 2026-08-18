@@ -16,6 +16,8 @@
   },
   "scripts": {
     "start": "cds-serve",
+    "//deploy-db": "Cria as tabelas de db/schema.cds (ChatVisualizacoes) no sqlite de db/. OBRIGATORIO uma vez depois de clonar/pull que traga db/schema.cds: como o [development] abaixo aponta para um ARQUIVO (nao :memory:), o cds watch NAO deploya sozinho - sem isto, ChamadosComMensagemNova e MarcarChatVisualizado respondem 500 'no such table' e o chat perde notificacao/visualizado. NAO encadear no watch: cds deploy recria a tabela, apagando o historico de visualizacao a cada restart.",
+    "deploy-db": "cds deploy",
     "watch-mw_monitor_chamados": "cds watch --open megawork.mwmonitorchamados/index.html?sap-ui-xx-viewCache=false --livereload false"
   },
   "cds": {
