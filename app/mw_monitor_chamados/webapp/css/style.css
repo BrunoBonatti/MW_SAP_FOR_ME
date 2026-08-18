@@ -10,6 +10,14 @@
     overflow: visible;
 }
 
+/* Etapa "Assunto" do wizard de criar chamado: os cartoes ficam centralizados com largura
+   maxima em vez de esticar borda a borda da tela, para nao ficarem largos demais em monitores
+   grandes. */
+.mwCriarChamadoConteudo {
+    max-width: 60rem;
+    margin: 0 auto;
+}
+
 .mwFiltroBarra {
     box-sizing: border-box;
     padding-bottom: 0.5rem;

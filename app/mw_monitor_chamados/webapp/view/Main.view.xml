@@ -323,7 +323,7 @@
                                     text="{i18n>criarChamadoWizContinuar}"
                                     icon="sap-icon://navigation-right-arrow"
                                     iconFirst="false"
-                                    visible="{= ${view>/passoWizard} &lt; 4 }"
+                                    visible="{= ${view>/passoWizard} &lt; 2 }"
                                     enabled="{view>/podeAvancar}"
                                     press=".onWizardAvancar">
                                     <layoutData>
@@ -335,7 +335,7 @@
                                     type="Emphasized"
                                     icon="sap-icon://paper-plane"
                                     text="{i18n>criarChamadoAbrir}"
-                                    visible="{= ${view>/passoWizard} === 4 }"
+                                    visible="{= ${view>/passoWizard} === 2 }"
                                     press=".onSubmitChamado">
                                     <layoutData>
                                         <OverflowToolbarLayoutData priority="NeverOverflow" />

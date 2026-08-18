@@ -186,9 +186,8 @@ sap.ui.define([
 
     const WIZARD_ID = "wizardCriarChamado";
     const PASSO_CLASSIFICACAO = 1;
-    const PASSO_DETALHES = 2;
-    const TOTAL_PASSOS_WIZARD = 4;
-    const IDS_PASSOS_WIZARD = ["stepClassificacao", "stepDetalhes", "stepAnexo", "stepRevisao"];
+    const TOTAL_PASSOS_WIZARD = 2;
+    const IDS_PASSOS_WIZARD = ["stepClassificacao", "stepRevisao"];
 
 
     // Cockpit (Home). Mesmo escopo da aba "Acompanhar Chamados", requisitante ou executor
@@ -4139,9 +4138,7 @@ sap.ui.define([
                     oWizard.discardProgress(oPassoPendente);
                     oWizard.invalidateStep(oPassoPendente);
                     this._irParaPasso(iPendente);
-                    MessageToast.show(this._getResourceBundle().getText(
-                        iPendente === PASSO_CLASSIFICACAO ? "criarChamadoWizStep1Falta" : "criarChamadoWizStep2Falta"
-                    ));
+                    MessageToast.show(this._getResourceBundle().getText(this._mensagemPassoIncompleto()));
                     return;
                 }
             }
@@ -4218,7 +4215,7 @@ sap.ui.define([
                 oTextAreaDescricao?.setValueState("Error");
                 oTextAreaDescricao?.setValueStateText(sErro);
                 MessageToast.show(sErro);
-                this._irParaPasso(PASSO_DETALHES);
+                this._irParaPasso(PASSO_CLASSIFICACAO);
                 return;
             }
 
@@ -4581,7 +4578,7 @@ sap.ui.define([
 
             if (oPrimeiroPasso) {
                 oWizard.discardProgress(oPrimeiroPasso);
-                [PASSO_CLASSIFICACAO, PASSO_DETALHES].forEach((iPasso) => {
+                [PASSO_CLASSIFICACAO].forEach((iPasso) => {
                     const oPasso = this._getPassoWizardControl(iPasso);
                     if (oPasso) {
                         oWizard.invalidateStep(oPasso);
@@ -4597,7 +4594,7 @@ sap.ui.define([
             const oWizard = this._getWizard();
 
             if (oWizard) {
-                [PASSO_CLASSIFICACAO, PASSO_DETALHES].forEach((iPasso) => {
+                [PASSO_CLASSIFICACAO].forEach((iPasso) => {
                     const oPasso = this._getPassoWizardControl(iPasso);
 
                     if (!oPasso) {
@@ -4615,15 +4612,13 @@ sap.ui.define([
             this._atualizarNavegacaoWizard();
         },
 
+        // Passo 1 (Assunto) reune classificacao, descricao e anexos: precisa de titulo E descricao
+        // preenchidos para liberar o passo 2 (Revisao).
         _isPassoValido(iPasso) {
             const oData = this.getView().getModel("novoChamado")?.getData() ?? {};
 
             if (iPasso === PASSO_CLASSIFICACAO) {
-                return !!(oData.titulo && oData.titulo.trim());
-            }
-
-            if (iPasso === PASSO_DETALHES) {
-                return !!(oData.descricao && oData.descricao.trim());
+                return !!(oData.titulo && oData.titulo.trim()) && !!(oData.descricao && oData.descricao.trim());
             }
 
             return true;
@@ -4634,11 +4629,19 @@ sap.ui.define([
                 return PASSO_CLASSIFICACAO;
             }
 
-            if (!this._isPassoValido(PASSO_DETALHES)) {
-                return PASSO_DETALHES;
+            return 0;
+        },
+
+        // Titulo e descricao vivem no mesmo passo agora; a mensagem de toast aponta o campo que
+        // realmente falta em vez de amarrar o texto a um numero de passo.
+        _mensagemPassoIncompleto() {
+            const oData = this.getView().getModel("novoChamado")?.getData() ?? {};
+
+            if (!oData.titulo || !oData.titulo.trim()) {
+                return "criarChamadoWizStep1Falta";
             }
 
-            return 0;
+            return "criarChamadoDescricaoWizFalta";
         },
 
         _irParaPasso(iPasso) {
@@ -5382,6 +5385,26 @@ sap.ui.define([
 
             oViewModel.setProperty("/chatSelecionado", null);
             oViewModel.setProperty("/chatMensagens", []);
+        },
+
+        // Mesmo padrao de onChatFechar, so que para o lado SAP: a linha mora em
+        // view>/chatListaSap (resolvida por _pathDoChatPorId) e o cache por linha e
+        // comentariosCarregados, nao chatCarregado do model "tickets" - ver
+        // _carregarComentariosDoCasoSap/_espelharCasosSapNoChat.
+        onChatFecharSap() {
+            const oViewModel = this.getView().getModel("view");
+            const oChatSelecionado = oViewModel.getProperty("/chatSelecionadoSap");
+
+            if (oChatSelecionado) {
+                const sPathChat = this._pathDoChatPorId(String(oChatSelecionado.id ?? "").trim(), "Sap");
+
+                if (sPathChat) {
+                    oViewModel.setProperty(sPathChat + "/comentariosCarregados", false);
+                }
+            }
+
+            oViewModel.setProperty("/chatSelecionadoSap", null);
+            oViewModel.setProperty("/chatMensagensSap", []);
         },
 
         // Atende os eventos search e liveChange do mesmo SearchField: um deles traz "query",
