@@ -1,0 +1,424 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:layout="sap.ui.layout"
+    core:require="{formatter: 'megawork/mwhelpdesk/model/formatter'}">
+    <!-- Copia de Chats.fragment.xml para o item "Chat com SAP" do menu. Mesma estrutura e mesmas
+         funcionalidades; o que muda: ids com sufixo "Sap", handlers *Sap no Main.controller.js e
+         estado proprio no modelo "view" (/chatListaSap, /chatSelecionadoSap, /chatMensagensSap,
+         /chatCarregandoSap) - sem isso, selecionar uma conversa aqui trocaria a conversa aberta na
+         tela Chats tambem. A lista NAO e mock: nasce dos casos SAP reais - _espelharCasosSapNoChat
+         mapeia tickets>/TicketsSap (a MESMA carga da tela Acompanhar chamados SAP) para
+         /chatListaSap - e a conversa vem dos comentarios do caso na Cloud ALM
+         (/ComentariosCasoSap). Os nomes dos campos continuam sendo os do mock (nome,
+         ultimaMensagem, dataHora, naoLidas) de proposito: e o que mantem este markup e o de
+         Chats.fragment.xml identicos. -->
+    <!-- Master/detail proprio: a coluna da lista (chatsColunaLista) e a coluna da conversa
+         (chatsColunaConversa) sao dois VBox irmaos do Splitter, sem dependencia um do outro.
+         Isso deixa a migracao futura para SplitContainer/FlexibleColumnLayout (comportamento
+         mobile) ser so a troca do container pai - nada de responsivo e implementado aqui.
+         Altura: o Splitter ocupa 100% da Page (que vem com enableScrolling="false"), e o unico
+         scroll da tela e o chatsMensagensScroll. Os ScrollContainer levam FlexItemData com
+         baseSize="0%" + minHeight="0rem" porque, sem isso, o min-size auto do flex item faz o
+         conteudo empurrar a altura e a barra de envio sair da tela (mesmo motivo do min-width
+         documentado em .mwChatLinha no style.css). -->
+    <layout:Splitter
+        id="chatsSplitterSap"
+        orientation="Horizontal"
+        width="100%"
+        height="100%">
+        <VBox
+            id="chatsColunaListaSap"
+            height="100%"
+            class="mwChatsColuna">
+            <layoutData>
+                <layout:SplitterLayoutData
+                    size="28%"
+                    minSize="260"
+                    resizable="true"/>
+            </layoutData>
+            <VBox
+                id="chatsListaCabecalhoSap"
+                class="mwChatsListaCabecalho">
+                <Title
+                    id="chatsTituloSap"
+                    text="{i18n>chatsSapTitulo}"
+                    level="H2"/>
+                <SearchField
+                    id="chatsSearchFieldSap"
+                    width="100%"
+                    placeholder="{i18n>chatsBuscaPlaceholder}"
+                    search=".onChatSearchSap"
+                    liveChange=".onChatSearchSap"
+                    class="sapUiTinyMarginTop"/>
+            </VBox>
+            <ScrollContainer
+                id="chatsListaScrollSap"
+                width="100%"
+                height="100%"
+                vertical="true"
+                horizontal="false"
+                focusable="false"
+                class="mwChatsListaScroll">
+                <layoutData>
+                    <FlexItemData
+                        growFactor="1"
+                        shrinkFactor="1"
+                        baseSize="0%"
+                        minHeight="0rem"/>
+                </layoutData>
+                <List
+                    id="chatsListSap"
+                    mode="SingleSelectMaster"
+                    selectionChange=".onChatSelectSap"
+                    items="{view>/chatListaSap}"
+                    noDataText="{i18n>chatsSapListaVazia}"
+                    showSeparators="Inner"
+                    class="mwListZebra">
+                    <CustomListItem class="mwChatsItem">
+                        <!-- O recuo lateral e a altura desta linha NAO moram aqui: moram no
+                             proprio <li>, via .mwChatsItem (regra no style.css). Motivo: entre o
+                             <li> e este HBox o ListItemBaseRenderer insere um wrapper
+                             div.sapMLIBContent com flex: 1 1 auto, max-width: 100% e
+                             overflow: hidden. Respiro pago DENTRO desse wrapper entra na regiao
+                             de clip, e margem lateral neste HBox width="100%" fica ainda FORA da
+                             caixa: a linha passa a pedir 100% + 2rem dentro de 100% e e esse
+                             overflow do .sapMLIBContent - nao o da coluna do Splitter, que e
+                             overflow: auto - que decapita o horario (perde os minutos) e o
+                             contador de nao lidas. Mesmo pitfall do Input da barra de envio,
+                             documentado la embaixo. Aqui o HBox e so o distribuidor horizontal.
+                             O alignItems e Baseline, e nao Center, porque o bloco da direita
+                             (data + contador) e mais curto que as duas linhas da esquerda:
+                             centrado, o horario flutuava no vao entre nome e ultima mensagem.
+                             Baseline em vez de Start porque as duas colunas tem tamanhos de
+                             fonte diferentes (nome em H6, 0.875rem; data em .mwLegenda,
+                             0.75rem): alinhando os TOPOS, a base da data caia ~2px acima da
+                             base do nome e o horario ficava com aparencia de levantado. Como
+                             cada lado e uma VBox, o baseline de cada um vem do primeiro filho -
+                             ou seja, nome e data pousam na mesma linha. -->
+                        <HBox
+                            width="100%"
+                            alignItems="Baseline"
+                            justifyContent="SpaceBetween">
+                            <!-- minWidth="0" e o que permite o nome e a ultima mensagem truncarem
+                                 em "..." em vez de estourar a largura da coluna. -->
+                            <VBox class="mwChatsItemTexto">
+                                <layoutData>
+                                    <FlexItemData
+                                        growFactor="1"
+                                        shrinkFactor="1"
+                                        minWidth="0"/>
+                                </layoutData>
+                                <Title
+                                    text="{view>nome}"
+                                    level="H4"
+                                    titleStyle="H6"
+                                    wrapping="false"/>
+                                <Text
+                                    text="{view>ultimaMensagem}"
+                                    maxLines="1"
+                                    wrapping="false"
+                                    class="mwLegenda"/>
+                            </VBox>
+                            <VBox
+                                alignItems="End"
+                                class="mwChatsItemMeta sapUiTinyMarginBegin">
+                                <layoutData>
+                                    <FlexItemData
+                                        growFactor="0"
+                                        shrinkFactor="0"/>
+                                </layoutData>
+                                <Text
+                                    text="{path: 'view>dataHora', formatter: 'formatter.dataAbertura'}"
+                                    wrapping="false"
+                                    class="mwLegenda"/>
+                                <ObjectStatus
+                                    text="{view>naoLidas}"
+                                    state="Information"
+                                    inverted="true"
+                                    visible="{= ${view>naoLidas} &gt; 0 }"
+                                    tooltip="{i18n>chatsNaoLidasTooltip}"/>
+                            </VBox>
+                        </HBox>
+                    </CustomListItem>
+                </List>
+            </ScrollContainer>
+        </VBox>
+        <VBox
+            id="chatsColunaConversaSap"
+            height="100%"
+            class="mwChatsColuna">
+            <layoutData>
+                <layout:SplitterLayoutData
+                    size="auto"
+                    minSize="320"
+                    resizable="true"/>
+            </layoutData>
+            <VBox
+                id="chatsVazioBoxSap"
+                height="100%"
+                width="100%"
+                justifyContent="Center"
+                alignItems="Center"
+                class="mwChatsPainel"
+                visible="{= !${view>/chatSelecionadoSap} }">
+                <Text
+                    id="chatsVazioTextoSap"
+                    text="{i18n>chatsNenhumSelecionado}"
+                    textAlign="Center"/>
+            </VBox>
+            <VBox
+                id="chatsConversaBoxSap"
+                height="100%"
+                width="100%"
+                class="mwChatsPainel"
+                visible="{= !!${view>/chatSelecionadoSap} }">
+                <HBox
+                    id="chatsCabecalhoBoxSap"
+                    width="100%"
+                    alignItems="Center"
+                    justifyContent="SpaceBetween"
+                    class="mwChatsCabecalho">
+                    <VBox
+                        id="chatsCabecalhoTextoBoxSap"
+                        class="mwChatsItemTexto">
+                        <layoutData>
+                            <FlexItemData
+                                growFactor="1"
+                                shrinkFactor="1"
+                                minWidth="0"/>
+                        </layoutData>
+                        <Title
+                            id="chatsCabecalhoNomeSap"
+                            text="{view>/chatSelecionadoSap/nome}"
+                            level="H3"
+                            titleStyle="H5"
+                            wrapping="false"/>
+                        <Text
+                            id="chatsCabecalhoDepartamentoSap"
+                            text="{view>/chatSelecionadoSap/departamento}"
+                            wrapping="false"
+                            class="mwLegenda"/>
+                    </VBox>
+                    <HBox alignItems="Center">
+                        <layoutData>
+                            <FlexItemData
+                                growFactor="0"
+                                shrinkFactor="0"/>
+                        </layoutData>
+                        <Button
+                            id="chatsBotaoAcoesSap"
+                            text="{i18n>chatsAcoes}"
+                            type="Transparent"
+                            icon="sap-icon://action-settings"
+                            press=".onChatAcoes"/>
+                    </HBox>
+                </HBox>
+                <!-- Unico scroll da tela: cabecalho e barra de envio ficam fixos. -->
+                <ScrollContainer
+                    id="chatsMensagensScrollSap"
+                    width="100%"
+                    height="100%"
+                    vertical="true"
+                    horizontal="false"
+                    focusable="false"
+                    class="mwChatsAreaMensagens">
+                    <layoutData>
+                        <FlexItemData
+                            growFactor="1"
+                            shrinkFactor="1"
+                            baseSize="0%"
+                            minHeight="0rem"/>
+                    </layoutData>
+                    <!-- Mesmos atributos da List do chat do DetalheChamado: busy com
+                         busyIndicatorDelay 0 (indicador imediato ao trocar de conversa) e o
+                         estado vazio como IllustratedMessage em vez de noDataText, para a
+                         conversa sem mensagem ter a mesma cara nas duas telas. -->
+                    <List
+                        id="chatsMensagensListSap"
+                        items="{view>/chatMensagensSap}"
+                        busy="{= ${view>/chatCarregandoSap} === true }"
+                        busyIndicatorDelay="0"
+                        showSeparators="None">
+                        <noData>
+                            <IllustratedMessage
+                                illustrationType="sapIllus-NoMail"
+                                illustrationSize="Small"
+                                title="{i18n>chatsSapSemMensagens}"
+                                description="{i18n>chatsSapSemMensagensDesc}"/>
+                        </noData>
+                        <CustomListItem>
+                            <!-- Mesmo padrao do chat do DetalheChamado: dois HBox mutuamente
+                                 exclusivos por ${view>eu}, um alinhado a esquerda (entrada) e
+                                 outro a direita (saida). -->
+                            <VBox width="100%">
+                                <HBox
+                                    visible="{= ${view>eu} !== true }"
+                                    width="100%"
+                                    alignItems="Start"
+                                    justifyContent="Start"
+                                    wrap="NoWrap"
+                                    class="mwChatLinha sapUiTinyMarginTopBottom">
+                                    <VBox width="1rem">
+                                        <layoutData>
+                                            <FlexItemData
+                                                growFactor="0"
+                                                shrinkFactor="0"/>
+                                        </layoutData>
+                                    </VBox>
+                                    <Avatar
+                                        displaySize="S"
+                                        src="sap-icon://customer">
+                                        <layoutData>
+                                            <FlexItemData
+                                                growFactor="0"
+                                                shrinkFactor="0"/>
+                                        </layoutData>
+                                    </Avatar>
+                                    <VBox width="1rem">
+                                        <layoutData>
+                                            <FlexItemData
+                                                growFactor="0"
+                                                shrinkFactor="0"/>
+                                        </layoutData>
+                                    </VBox>
+                                    <VBox class="mwChatBolhaEntrada">
+                                        <layoutData>
+                                            <FlexItemData
+                                                growFactor="0"
+                                                shrinkFactor="1"
+                                                minWidth="0"/>
+                                        </layoutData>
+                                        <Title
+                                            titleStyle="H6"
+                                            text="{view>autor}"
+                                            wrapping="true"/>
+                                        <Text
+                                            text="{view>texto}"
+                                            wrapping="true"
+                                            renderWhitespace="true"
+                                            class="mwChatTextoQuebra"/>
+                                        <Text
+                                            width="100%"
+                                            text="{path: 'view>quando', formatter: 'formatter.dataAbertura'}"
+                                            wrapping="false"
+                                            textAlign="Begin"
+                                            class="mwLegenda"/>
+                                    </VBox>
+                                </HBox>
+                                <HBox
+                                    visible="{= ${view>eu} === true }"
+                                    width="100%"
+                                    alignItems="Start"
+                                    justifyContent="End"
+                                    wrap="NoWrap"
+                                    class="mwChatLinha sapUiTinyMarginTopBottom">
+                                    <VBox class="mwChatBolhaSaida">
+                                        <layoutData>
+                                            <FlexItemData
+                                                growFactor="0"
+                                                shrinkFactor="1"
+                                                minWidth="0"/>
+                                        </layoutData>
+                                        <HBox
+                                            width="100%"
+                                            justifyContent="End">
+                                            <Title
+                                                titleStyle="H6"
+                                                text="{view>autor}"
+                                                wrapping="true"/>
+                                        </HBox>
+                                        <Text
+                                            text="{view>texto}"
+                                            wrapping="true"
+                                            renderWhitespace="true"
+                                            class="mwChatTextoQuebra"/>
+                                        <Text
+                                            width="100%"
+                                            text="{path: 'view>quando', formatter: 'formatter.dataAbertura'}"
+                                            wrapping="false"
+                                            textAlign="End"
+                                            class="mwLegenda"/>
+                                    </VBox>
+                                    <VBox width="1rem">
+                                        <layoutData>
+                                            <FlexItemData
+                                                growFactor="0"
+                                                shrinkFactor="0"/>
+                                        </layoutData>
+                                    </VBox>
+                                    <Avatar
+                                        displaySize="S"
+                                        src="sap-icon://employee">
+                                        <layoutData>
+                                            <FlexItemData
+                                                growFactor="0"
+                                                shrinkFactor="0"/>
+                                        </layoutData>
+                                    </Avatar>
+                                    <VBox width="3rem">
+                                        <layoutData>
+                                            <FlexItemData
+                                                growFactor="0"
+                                                shrinkFactor="0"/>
+                                        </layoutData>
+                                    </VBox>
+                                </HBox>
+                            </VBox>
+                        </CustomListItem>
+                    </List>
+                </ScrollContainer>
+                <!-- Barra fixa: growFactor 0 impede que ela seja empurrada pela area de mensagens. -->
+                <HBox
+                    id="chatsBarraEnvioSap"
+                    width="100%"
+                    alignItems="Center"
+                    class="mwChatsBarraEnvio">
+                    <layoutData>
+                        <FlexItemData
+                            growFactor="0"
+                            shrinkFactor="0"/>
+                    </layoutData>
+                    <!-- Mesmo controle de envio do chat do DetalheChamado: um sap.m.FeedInput,
+                         que ja traz campo + avatar + botao de postar num unico controle e limpa
+                         o value depois do post - o controller so volta a mexer no value quando o
+                         POST na ALM falha, para devolver ao usuario o texto que ele digitou.
+                         O HBox em volta continua aqui, e nao no lugar do FeedInput, porque esta
+                         tela e de altura cheia e a barra precisa ser regiao FIXA: e o
+                         .mwChatsBarraEnvio que paga o padding, a borda de cima e o
+                         flex-shrink: 0, coisas que o card do DetalheChamado resolvia com
+                         sapUiSmallMarginTop porque la a caixa de mensagens tem altura fixa de
+                         20rem. O FeedInput nao tem propriedade width e nao precisa: o tema ja da
+                         .sapMFeedIn { display: block; width: 100%; box-sizing: border-box }, e
+                         ele vai dentro de um div.sapMFlexItem (bloco) que recebe o FlexItemData,
+                         entao ocupa a barra inteira sozinho. Nenhuma classe de margem lateral
+                         aqui: margem somada a largura de 100% e o pitfall que estourava a caixa
+                         para fora do wrapper, ja documentado no DetalheChamado. O icone vai
+                         junto com o do DetalheChamado por paridade, mas no Horizon ele nao
+                         aparece - o tema faz .sapMFeedInFigure { display: none } e recolhe o
+                         padding-left de 5rem para 0.5rem. O botao de anexo saiu junto com a
+                         barra custom: o FeedInput nao tem anexo, e era uma acao "em
+                         construcao". -->
+                    <!-- enabled cai no envio (POST da ALM sem deduplicacao) e na leitura
+                         (releitura em voo descartaria ou duplicaria a bolha do envio). -->
+                    <!-- maxLength espelha o teto do backend, senao so a recusa da ALM o revela. -->
+                    <FeedInput
+                        id="chatsFeedInputSap"
+                        icon="sap-icon://employee"
+                        placeholder="{i18n>chatsMensagemPlaceholder}"
+                        buttonTooltip="{i18n>chatsEnviarTooltip}"
+                        maxLength="5000"
+                        enabled="{= ${view>/chatEnviandoSap} !== true &amp;&amp; ${view>/chatCarregandoSap} !== true }"
+                        post=".onChatEnviarMensagemSap">
+                        <layoutData>
+                            <FlexItemData
+                                growFactor="1"
+                                shrinkFactor="1"
+                                minWidth="0"/>
+                        </layoutData>
+                    </FeedInput>
+                </HBox>
+            </VBox>
+        </VBox>
+    </layout:Splitter>
+</core:FragmentDefinition>

@@ -1,0 +1,40 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    core:require="{formatter: 'megawork/mwhelpdesk/model/formatter'}">
+    <!-- Fora do Main.view.xml de proposito: onNotificationPress instancia sob demanda com
+         loadFragment (mesmo padrao do dialogo AbrirChamadoSap). Conteudo em view>/notificacoesLista
+         (ver _montarChatLista/_verificarNotificacoesChats no controller) - so os chamados com
+         nota nova desde a ultima visualizacao. -->
+    <Popover
+        id="popoverNotificacoes"
+        title="{i18n>notificationTitle}"
+        contentWidth="24rem"
+        placement="Bottom">
+        <content>
+            <List
+                id="listaNotificacoes"
+                items="{view>/notificacoesLista}"
+                mode="None"
+                showSeparators="Inner">
+                <noData>
+                    <IllustratedMessage
+                        illustrationType="sapIllus-NoNotifications"
+                        illustrationSize="Small"
+                        enableDefaultTitleAndDescription="false"
+                        title="{i18n>notificacoesVaziaTitulo}"
+                        description="{i18n>notificacoesVaziaDescricao}"/>
+                </noData>
+                <items>
+                    <StandardListItem
+                        title="{view>nome}"
+                        description="{view>departamento}"
+                        info="{path: 'view>dataHora', formatter: 'formatter.dataAbertura'}"
+                        icon="sap-icon://discussion"
+                        type="Active"
+                        press=".onNotificacaoPress"/>
+                </items>
+            </List>
+        </content>
+    </Popover>
+</core:FragmentDefinition>

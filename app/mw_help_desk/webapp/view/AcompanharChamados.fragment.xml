@@ -1,0 +1,196 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:f="sap.f"
+    core:require="{formatter: 'megawork/mwhelpdesk/model/formatter'}">
+    <VBox>
+        <f:Card width="100%" class="mwCartaoLista">
+            <f:content>
+                <VBox width="100%">
+                    <HBox
+                        justifyContent="End"
+                        alignItems="Center"
+                        class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiSmallMarginTop sapUiSmallMarginBottom">
+                        <Button
+                            icon="sap-icon://sort"
+                            type="Transparent"
+                            tooltip="{i18n>ticketsSortTooltip}"
+                            press=".onSortTickets"
+                            class="sapUiTinyMarginEnd"/>
+                        <Button
+                            icon="sap-icon://refresh"
+                            type="Transparent"
+                            tooltip="{i18n>ticketsRefreshTooltip}"
+                            press=".onRefreshTickets"/>
+                    </HBox>
+                    <HBox
+                        wrap="Wrap"
+                        alignItems="End"
+                        class="mwFiltroBarra sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiSmallMarginBottom">
+                        <VBox class="sapUiSmallMarginEnd sapUiTinyMarginBottom">
+                            <Label
+                                text="{i18n>ticketsFiltroPesquisa}"
+                                labelFor="searchTickets"/>
+                            <SearchField
+                                id="searchTickets"
+                                width="18rem"
+                                placeholder="{i18n>ticketsSearchPlaceholder}"
+                                search=".onSearchTickets"
+                                liveChange=".onSearchTickets"/>
+                        </VBox>
+                        <!-- Listas montadas pelo controller a partir dos code + texto das linhas
+                             lidas do C4C, nao dos codelists locais. -->
+                        <VBox class="sapUiSmallMarginEnd sapUiTinyMarginBottom">
+                            <Label
+                                text="{i18n>ticketsFiltroStatus}"
+                                labelFor="selectStatus"/>
+                            <Select
+                                id="selectStatus"
+                                width="12rem"
+                                tooltip="{i18n>ticketsFiltroStatus}"
+                                change=".onFilterTickets"
+                                items="{tickets>/FiltroStatus}">
+                                <core:Item key="{tickets>code}" text="{tickets>descricao}"/>
+                            </Select>
+                        </VBox>
+                        <VBox class="sapUiSmallMarginEnd sapUiTinyMarginBottom">
+                            <Label
+                                text="{i18n>ticketsFiltroPrioridade}"
+                                labelFor="selectPrioridade"/>
+                            <Select
+                                id="selectPrioridade"
+                                width="12rem"
+                                tooltip="{i18n>ticketsFiltroPrioridade}"
+                                change=".onFilterTickets"
+                                items="{tickets>/FiltroPrioridade}">
+                                <core:Item key="{tickets>code}" text="{tickets>descricao}"/>
+                            </Select>
+                        </VBox>
+                        <VBox class="sapUiSmallMarginEnd sapUiTinyMarginBottom">
+                            <Label
+                                text="{i18n>ticketsFiltroDataAbertura}"
+                                labelFor="drsDataAbertura"/>
+                            <DateRangeSelection
+                                id="drsDataAbertura"
+                                width="16rem"
+                                placeholder="{i18n>ticketsDataAberturaPlaceholder}"
+                                change=".onFilterDataAbertura"/>
+                        </VBox>
+                    </HBox>
+                    <!-- contextualWidth="Auto": sem isso o demandPopin das colunas mede a janela,
+                         nao a largura da tabela dentro do cartao, e nenhuma coluna vira popin. -->
+                    <Table
+                        id="ticketsTable"
+                        items="{tickets>/Tickets}"
+                        growing="true"
+                        growingThreshold="20"
+                        alternateRowColors="true"
+                        sticky="ColumnHeaders"
+                        popinLayout="GridLarge"
+                        contextualWidth="Auto"
+                        class="mwTabelaChamados sapUiTinyMarginBottom">
+                        <noData>
+                            <IllustratedMessage
+                                illustrationType="sapIllus-NoEntries"
+                                illustrationSize="Small"
+                                title="{i18n>ticketsNoData}"
+                                description="{i18n>ticketsNoDataDesc}"/>
+                        </noData>
+                        <!-- Colunas e celulas sao posicionais: manter a mesma ordem nas duas
+                             agregacoes. Titulo fica sem width para absorver a sobra. -->
+                        <columns>
+                            <Column
+                                width="9rem"
+                                visible="{= ${view>/requisitanteEhFuncionario} }">
+                                <Text text="{i18n>ticketsColPriority}"/>
+                            </Column>
+                            <Column width="7rem">
+                                <Text text="{i18n>ticketsColId}"/>
+                            </Column>
+                            <Column>
+                                <Text text="{i18n>ticketsColTitle}"/>
+                            </Column>
+                            <Column
+                                width="9rem"
+                                demandPopin="true"
+                                minScreenWidth="Tablet"
+                                popinDisplay="Inline">
+                                <Text text="{i18n>ticketsColSituacao}"/>
+                            </Column>
+                            <Column
+                                width="9rem"
+                                demandPopin="true"
+                                minScreenWidth="Desktop"
+                                popinDisplay="Inline">
+                                <Text text="{i18n>ticketsColStatus}"/>
+                            </Column>
+                            <Column
+                                width="12rem"
+                                demandPopin="true"
+                                minScreenWidth="Desktop"
+                                popinDisplay="Inline">
+                                <Text text="{i18n>ticketsColResponsible}"/>
+                            </Column>
+                            <Column
+                                width="10rem"
+                                hAlign="End"
+                                demandPopin="true"
+                                minScreenWidth="Tablet"
+                                popinDisplay="Inline">
+                                <Text text="{i18n>ticketsColOpenDate}"/>
+                            </Column>
+                        </columns>
+                        <items>
+                            <ColumnListItem
+                                type="Navigation"
+                                vAlign="Middle"
+                                press=".onTicketPress">
+                                <cells>
+                                    <!-- Prioridade = ServicePriorityCode (eixo de urgencia do C4C),
+                                         dominio diferente dos dois status abaixo. -->
+                                    <ObjectStatus
+                                        visible="{= ${view>/requisitanteEhFuncionario} }"
+                                        inverted="true"
+                                        text="{tickets>prioridadeTexto}"
+                                        state="{path: 'tickets>prioridade', formatter: 'formatter.prioridadeState'}"
+                                        icon="{path: 'tickets>prioridade', formatter: 'formatter.prioridadeIcone'}"/>
+                                    <ObjectIdentifier title="{tickets>ID}"/>
+                                    <ObjectIdentifier title="{tickets>titulo}" text="{tickets>tipo}"/>
+                                    <!-- Tipo (ProcessingTypeCodeText): sem code, o proprio texto
+                                         alimenta o tipoState. Cabecalho "Situacao" e intencional. -->
+                                    <ObjectStatus
+                                        inverted="true"
+                                        text="{tickets>tipo}"
+                                        state="{path: 'tickets>tipo', formatter: 'formatter.tipoState'}"
+                                        icon="sap-icon://tag"/>
+                                    <!-- Status Z (ServiceRequestUserLifeCycleStatusCode), mesmo campo
+                                         e formatters do DetalheChamado - a cor tem de bater com o detalhe. -->
+                                    <ObjectStatus
+                                        inverted="true"
+                                        text="{tickets>statusTexto}"
+                                        state="{path: 'tickets>status', formatter: 'formatter.statusState'}"
+                                        icon="{path: 'tickets>status', formatter: 'formatter.statusIcone'}"/>
+                                    <!-- O texto de "sem responsavel" entra como part do binding: o
+                                         formatter nao alcanca o bundle i18n. -->
+                                    <ObjectStatus
+                                        state="None"
+                                        icon="sap-icon://employee"
+                                        text="{
+                                            parts: [
+                                                {path: 'tickets>responsavelId'},
+                                                {path: 'i18n>detalheNaoAtribuido'}
+                                            ],
+                                            formatter: 'formatter.responsavelTexto'
+                                        }"/>
+                                    <Text
+                                        wrapping="false"
+                                        text="{path: 'tickets>dataAbertura', formatter: 'formatter.dataAbertura'}"/>
+                                </cells>
+                            </ColumnListItem>
+                        </items>
+                    </Table>
+                </VBox>
+            </f:content>
+        </f:Card>
+    </VBox>
+</core:FragmentDefinition>

@@ -1,0 +1,613 @@
+<core:FragmentDefinition
+    xmlns="sap.m"
+    xmlns:core="sap.ui.core"
+    xmlns:f="sap.f"
+    xmlns:suite="sap.suite.ui.commons"
+    xmlns:cards="sap.f.cards"
+    xmlns:layout="sap.ui.layout"
+    xmlns:u="sap.ui.unified"
+    core:require="{formatter: 'megawork/mwhelpdesk/model/formatter'}">
+    <f:DynamicPage
+        id="detalheDynamicPage"
+        headerExpanded="{view>/detalheHeaderExpandido}"
+        preserveHeaderStateOnScroll="{view>/detalheEdicao}"
+        toggleHeaderOnTitleClick="{= !${view>/detalheEdicao} }"
+        class="sapUiResponsivePadding--title sapUiResponsivePadding--header sapUiResponsivePadding--content">
+        <f:title>
+            <f:DynamicPageTitle areaShrinkRatio="2.2:1:0.1">
+                <!-- O Breadcrumbs vive DENTRO do heading, e nao na aggregation <f:breadcrumbs>
+                     do DynamicPageTitle, para o botao de voltar poder ficar ao lado dele: aquela
+                     aggregation e tipada como sap.m.IBreadcrumbs e so aceita um Breadcrumbs, nao
+                     um HBox. Mesmo arranjo da linha WZv1. -->
+                <f:heading>
+                    <VBox>
+                        <HBox
+                            alignItems="Center"
+                            class="sapUiTinyMarginBottom">
+                            <Button
+                                icon="sap-icon://nav-back"
+                                type="Transparent"
+                                tooltip="{i18n>detalheVoltar}"
+                                press=".onDetalheVoltar"
+                                class="mwDetalheVoltarBotao sapUiTinyMarginEnd"/>
+                            <Breadcrumbs
+                                currentLocationText="{tickets>ID}"
+                                class="sapUiSmallMarginTop">
+                                <Link
+                                    text="{i18n>detalheBreadcrumbChamados}"
+                                    tooltip="{i18n>detalheVoltar}"
+                                    press=".onDetalheVoltar"/>
+                            </Breadcrumbs>
+                        </HBox>
+                        <HBox
+                            alignItems="Center"
+                            wrap="Wrap"
+                            class="sapUiTinyMarginBottom">
+                            <Avatar
+                                src="sap-icon://document-text"
+                                displayShape="Square"
+                                displaySize="L"
+                                backgroundColor="Accent6"
+                                class="sapUiMediumMarginEnd sapUiTinyMarginBottom"/>
+                            <VBox class="sapUiTinyMarginBottom">
+                                <Title
+                                    text="{tickets>titulo}"
+                                    level="H2"
+                                    wrapping="true"/>
+                                <!-- Status (campo Z), Prioridade e Tipo, nesta ordem a pedido do usuario.
+                                     O tag do Tipo se repete em AcompanharChamados: mudar nos dois. -->
+                                <HBox
+                                    wrap="Wrap"
+                                    alignItems="Center"
+                                    class="sapUiTinyMarginTop">
+                                    <ObjectStatus
+                                        inverted="true"
+                                        text="{tickets>statusTexto}"
+                                        state="{path: 'tickets>status', formatter: 'formatter.statusState'}"
+                                        icon="{path: 'tickets>status', formatter: 'formatter.statusIcone'}"
+                                        class="sapUiTinyMarginEnd sapUiTinyMarginBottom"/>
+                                    <ObjectStatus
+                                        inverted="true"
+                                        text="{tickets>prioridadeTexto}"
+                                        state="{path: 'tickets>prioridade', formatter: 'formatter.prioridadeState'}"
+                                        icon="{path: 'tickets>prioridade', formatter: 'formatter.prioridadeIcone'}"
+                                        class="sapUiTinyMarginEnd sapUiTinyMarginBottom"/>
+                                    <ObjectStatus
+                                        inverted="true"
+                                        text="{tickets>tipo}"
+                                        state="{path: 'tickets>tipo', formatter: 'formatter.tipoState'}"
+                                        icon="sap-icon://tag"
+                                        class="sapUiTinyMarginBottom"/>
+                                </HBox>
+                            </VBox>
+                        </HBox>
+                    </VBox>
+                </f:heading>
+                <!-- Recarrega campos + chat + historico + anexos do chamado aberto.
+                     O id detalheRefreshButton e load-bearing: onDetalheAtualizar faz
+                     byId("detalheRefreshButton").setBusy(true/false).
+                     Tooltip literal "Atualizar" por consistencia com o cockpitRefreshButton
+                     do Main.view.xml (nenhum dos dois usa i18n). -->
+                <f:actions>
+                    <Button
+                        id="detalheRefreshButton"
+                        icon="sap-icon://refresh"
+                        type="Transparent"
+                        tooltip="Atualizar"
+                        press=".onDetalheAtualizar"/>
+                </f:actions>
+                <f:expandedContent>
+                    <HBox
+                        width="100%"
+                        justifyContent="SpaceBetween"
+                        alignItems="Start"
+                        wrap="Wrap"
+                        class="sapUiMediumMarginTop">
+                        <VBox
+                            width="12rem"
+                            class="sapUiTinyMarginBottom sapUiSmallMarginEnd">
+                            <Label
+                                text="{i18n>detalheAbertoEm}"
+                                class="mwFacetaRotulo sapUiTinyMarginBottom"/>
+                            <ObjectStatus
+                                text="{path: 'tickets>dataAbertura', formatter: 'formatter.dataAbertura'}"
+                                icon="sap-icon://calendar"
+                                state="None"
+                                class="mwFacetaValor"/>
+                        </VBox>
+                        <VBox
+                            width="12rem"
+                            class="sapUiTinyMarginBottom sapUiSmallMarginEnd">
+                            <Label
+                                text="{i18n>detalheResponsavel}"
+                                class="mwFacetaRotulo sapUiTinyMarginBottom"/>
+                            <ObjectStatus
+                                text="{tickets>buyerMainContactPartyName}"
+                                icon="sap-icon://employee"
+                                state="None"
+                                class="mwFacetaValor"/>
+                        </VBox>
+                        <VBox
+                            width="12rem"
+                            class="sapUiTinyMarginBottom sapUiSmallMarginEnd">
+                            <Label
+                                text="Empresa"
+                                class="mwFacetaRotulo sapUiTinyMarginBottom"/>
+                            <ObjectStatus
+                                text="{tickets>cliente}"
+                                icon="sap-icon://building"
+                                state="None"
+                                class="mwFacetaValor"/>
+                        </VBox>
+                        <VBox
+                            width="12rem"
+                            class="sapUiTinyMarginBottom sapUiSmallMarginEnd">
+                            <Label
+                                text="Responsável"
+                                class="mwFacetaRotulo sapUiTinyMarginBottom"/>
+                            <ObjectStatus
+                                text="{
+                                    parts: [
+                                        {path: 'tickets>responsavelId'},
+                                        {path: 'i18n>detalheNaoAtribuido'}
+                                    ],
+                                    formatter: 'formatter.responsavelTexto'
+                                }"
+                                icon="sap-icon://employee"
+                                state="None"
+                                class="mwFacetaValor"/>
+                        </VBox>
+                        <VBox
+                            width="12rem"
+                            class="sapUiTinyMarginBottom">
+                            <Label
+                                text="{i18n>detalheResolvidoEm}"
+                                class="mwFacetaRotulo sapUiTinyMarginBottom"/>
+                            <ObjectStatus
+                                text="{path: 'tickets>requestFinisheddatetimeContent', formatter: 'formatter.dataAbertura'}"
+                                icon="sap-icon://calendar"
+                                state="None"
+                                class="mwFacetaValor"/>
+                        </VBox>
+                    </HBox>
+                </f:expandedContent>
+            </f:DynamicPageTitle>
+        </f:title>
+        <f:header>
+            <f:DynamicPageHeader pinnable="false">
+                <MessageStrip
+                    visible="{view>/detalheEdicao}"
+                    type="Information"
+                    showIcon="true"
+                    text="{i18n>detalheEdicaoFaixa}"
+                    class="sapUiSmallMarginBottom"/>
+            </f:DynamicPageHeader>
+        </f:header>
+        <f:content>
+            <layout:Grid
+                containerQuery="true"
+                hSpacing="1"
+                vSpacing="1"
+                class="sapUiSmallMarginTop">
+                <VBox width="100%">
+                    <layoutData>
+                        <layout:GridData span="XL3 L3 M12 S12"/>
+                    </layoutData>
+                    <f:Card width="100%" class="sapUiSmallMarginBottom">
+                        <f:content>
+                            <VBox width="100%">
+                                <HBox
+                                    width="100%"
+                                    alignItems="Center"
+                                    class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop sapUiTinyMarginBottom">
+                                    <core:Icon
+                                        src="sap-icon://action-settings"
+                                        size="1.5rem"
+                                        class="sapUiSmallMarginEnd"/>
+                                    <Title
+                                        text="Ações rápidas"
+                                        titleStyle="H5"/>
+                                </HBox>
+                                <VBox
+                                    width="100%"
+                                    alignItems="Center"
+                                    class="sapUiTinyMarginTop sapUiTinyMarginBottom">
+                                    <Button
+                                        width="14rem"
+                                        text="Finalizar chamado"
+                                        icon="sap-icon://complete"
+                                        type="Accept"
+                                        press=".onDetalheFinalizarChamado"
+                                        enabled="{= !formatter.chamadoEncerrado(${tickets>status}) }"
+                                        class="sapUiTinyMarginBottom"/>
+                                    <Button
+                                        width="14rem"
+                                        text="Cancelar chamado"
+                                        icon="sap-icon://decline"
+                                        type="Reject"
+                                        press=".onDetalheCancelarChamado"
+                                        enabled="{= !formatter.chamadoEncerrado(${tickets>status}) }"
+                                        class="sapUiTinyMarginBottom"/>
+                                    <Button
+                                        width="14rem"
+                                        text="Abrir chamado SAP"
+                                        icon="sap-icon://sap-logo-shape"
+                                        type="Emphasized"
+                                        press=".onDetalheAbrirChamadoSap"
+                                        visible="{= ${view>/requisitanteEhFuncionario} }"/>
+                                </VBox>
+                            </VBox>
+                        </f:content>
+                    </f:Card>
+                    <f:Card width="100%" class="sapUiSmallMarginBottom">
+                        <f:content>
+                            <VBox width="100%">
+                                <HBox
+                                    width="100%"
+                                    alignItems="Center"
+                                    class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop sapUiTinyMarginBottom">
+                                    <core:Icon
+                                        src="sap-icon://document-text"
+                                        size="1.5rem"
+                                        class="sapUiSmallMarginEnd"/>
+                                    <Title
+                                        text="{i18n>detalheAbaDescricao}"
+                                        titleStyle="H5"/>
+                                </HBox>
+                                <VBox
+                                    width="100%"
+                                    class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop sapUiSmallMarginBottom">
+                                    <Text
+                                        renderWhitespace="true"
+                                        class="mwTextoCorrido"
+                                        text="{
+                                            parts: [
+                                                {path: 'tickets>descricao'},
+                                                {path: 'i18n>detalheDescricaoVazia'}
+                                            ],
+                                            formatter: 'formatter.textoOuTraco'
+                                        }"/>
+                                </VBox>
+                            </VBox>
+                        </f:content>
+                    </f:Card>
+                    <f:Card width="100%" class="sapUiSmallMarginBottom">
+                        <f:content>
+                            <VBox width="100%">
+                                <!-- SEM width="100%" de proposito: com width="100%" MAIS
+                                     sapUiSmallMarginBegin/End (margin 1rem !important cada) a
+                                     caixa pede 100% + 2rem dentro de 100%, desliza 1rem para a
+                                     direita e a borda direita cai FORA do .sapFCardContent, que o
+                                     Horizon deixa com overflow: hidden e sem padding proprio - o
+                                     retangulo de corte encosta na borda interna do cartao. Como o
+                                     SpaceBetween cola o uploader nessa borda, era o "+" que era
+                                     cortado. Sem width, o alignItems Stretch default do VBox pai
+                                     resolve a largura como 100% MENOS as margens, que voltam a ser
+                                     recuo de verdade. Classe interna do tema. -->
+                                <HBox
+                                    justifyContent="SpaceBetween"
+                                    alignItems="Center"
+                                    class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop sapUiTinyMarginBottom">
+                                    <HBox alignItems="Center">
+                                        <core:Icon
+                                            src="sap-icon://attachment"
+                                            size="1.5rem"
+                                            class="sapUiSmallMarginEnd"/>
+                                        <Title
+                                            text="{i18n>detalheAbaAnexos}"
+                                            titleStyle="H5"/>
+                                    </HBox>
+                                    <!-- multiple + sameFilenameAllowed: sem o segundo, o
+                                         FileUploader ignora a reselecao do mesmo arquivo
+                                         depois de um setValue(""). Extensao e tamanho ficam
+                                         fora do controle (sem fileType/maximumFileSize) e vao
+                                         no controller, arquivo por arquivo: o controle reprova
+                                         a selecao inteira no primeiro ofensor e engole o
+                                         change, levando os arquivos validos com ele. -->
+                                    <u:FileUploader
+                                        id="fileUploaderAnexoDetalhe"
+                                        name="anexoChamadoDetalhe"
+                                        class="mwUploaderBotao"
+                                        buttonOnly="true"
+                                        icon="sap-icon://add"
+                                        iconOnly="true"
+                                        tooltip="{i18n>detalheAnexoAdicionar}"
+                                        multiple="true"
+                                        sameFilenameAllowed="true"
+                                        enabled="{= !formatter.chamadoEncerrado(${tickets>status}) &amp;&amp; ${tickets>anexosEnviando} !== true }"
+                                        change=".onDetalheAnexoAdicionar">
+                                        <u:layoutData>
+                                            <FlexItemData shrinkFactor="0"/>
+                                        </u:layoutData>
+                                    </u:FileUploader>
+                                </HBox>
+                                <VBox
+                                    width="100%"
+                                    class="sapUiTinyMarginTop sapUiTinyMarginBottom">
+                                    <List
+                                        items="{tickets>anexos}"
+                                        busy="{= ${tickets>anexosCarregando} === true }"
+                                        busyIndicatorDelay="0"
+                                        showSeparators="Inner">
+                                        <noData>
+                                            <IllustratedMessage
+                                                illustrationType="sapIllus-NoData"
+                                                illustrationSize="ExtraSmall"
+                                                title="{i18n>detalheAnexosVazio}"
+                                                description="{i18n>detalheAnexosVazioDesc}"/>
+                                        </noData>
+                                        <CustomListItem
+                                            type="Active"
+                                            press=".onDetalheAnexoPress"
+                                            busy="{= ${tickets>baixando} === true || ${tickets>enviando} === true }"
+                                            busyIndicatorDelay="0">
+                                            <HBox
+                                                width="100%"
+                                                alignItems="Center"
+                                                justifyContent="SpaceBetween"
+                                                class="sapUiSmallMargin">
+                                                <HBox alignItems="Center">
+                                                    <Avatar
+                                                        displayShape="Square"
+                                                        displaySize="S"
+                                                        src="{path: 'tickets>nome', formatter: 'formatter.anexoIcone'}"/>
+                                                    <VBox class="sapUiSmallMarginBegin">
+                                                        <Title
+                                                            titleStyle="H6"
+                                                            text="{tickets>nome}"/>
+                                                        <Text
+                                                            text="{
+                                                                parts: [
+                                                                    {path: 'tickets>tamanho'},
+                                                                    {path: 'tickets>quando'},
+                                                                    {path: 'tickets>autor'}
+                                                                ],
+                                                                formatter: 'formatter.anexoLegenda'
+                                                            }"
+                                                            class="mwLegenda"/>
+                                                    </VBox>
+                                                </HBox>
+                                                <core:Icon
+                                                    src="sap-icon://download"
+                                                    decorative="false"
+                                                    tooltip="{tickets>nome}"/>
+                                            </HBox>
+                                        </CustomListItem>
+                                    </List>
+                                </VBox>
+                            </VBox>
+                        </f:content>
+                    </f:Card>
+                </VBox>
+                <f:Card width="100%" class="sapUiSmallMarginBottom">
+                    <f:layoutData>
+                        <layout:GridData span="XL6 L6 M12 S12"/>
+                    </f:layoutData>
+                    <f:content>
+                        <VBox width="100%">
+                            <HBox
+                                width="100%"
+                                justifyContent="Start"
+                                alignItems="Center"
+                                class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop">
+                                <HBox alignItems="Center">
+                                    <core:Icon
+                                        src="sap-icon://discussion"
+                                        size="1.5rem"
+                                        class="sapUiSmallMarginEnd"/>
+                                    <VBox>
+                                        <Title
+                                            text="{i18n>detalheAbaChat}"
+                                            titleStyle="H5"/>
+                                    </VBox>
+                                </HBox>
+                            </HBox>
+                            <VBox
+                                width="100%"
+                                class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop">
+                                <ScrollContainer
+    width="100%"
+    height="20rem"
+    vertical="true"
+    horizontal="false"
+    focusable="false">
+                                    <List
+                                        items="{tickets>chat}"
+                                        busy="{= ${tickets>chatCarregando} === true }"
+                                        busyIndicatorDelay="0"
+                                        showSeparators="None">
+                                        <noData>
+                                            <IllustratedMessage
+                                                illustrationType="sapIllus-NoMail"
+                                                illustrationSize="Small"
+                                                title="{i18n>detalheChatVazio}"
+                                                description="{i18n>detalheChatVazioDesc}"/>
+                                        </noData>
+                                        <CustomListItem>
+                                            <VBox width="100%">
+                                                <HBox
+                                                    visible="{= ${tickets>eu} !== true }"
+                                                    width="100%"
+                                                    alignItems="Start"
+                                                    justifyContent="Start"
+                                                    wrap="NoWrap"
+                                                    class="mwChatLinha sapUiTinyMarginTopBottom">
+                                                    <VBox width="1rem">
+                                                        <layoutData>
+                                                            <FlexItemData
+                                                                growFactor="0"
+                                                                shrinkFactor="0"/>
+                                                        </layoutData>
+                                                    </VBox>
+                                                    <Avatar
+                                                        displaySize="S"
+                                                        src="{= ${tickets>sistema} ? 'sap-icon://settings' : 'sap-icon://customer' }">
+                                                        <layoutData>
+                                                            <FlexItemData
+                                                                growFactor="0"
+                                                                shrinkFactor="0"/>
+                                                        </layoutData>
+                                                    </Avatar>
+                                                    <VBox width="1rem">
+                                                        <layoutData>
+                                                            <FlexItemData
+                                                                growFactor="0"
+                                                                shrinkFactor="0"/>
+                                                        </layoutData>
+                                                    </VBox>
+                                                    <VBox class="mwChatBolhaEntrada">
+                                                        <layoutData>
+                                                            <FlexItemData
+                                                                growFactor="0"
+                                                                shrinkFactor="1"
+                                                                minWidth="0"/>
+                                                        </layoutData>
+                                                        <Title
+                                                            titleStyle="H6"
+                                                            text="{tickets>autor}"
+                                                            wrapping="true"/>
+                                                        <Text
+                                                            text="{tickets>texto}"
+                                                            wrapping="true"
+                                                            renderWhitespace="true"
+                                                            class="mwChatTextoQuebra"/>
+                                                        <Text
+                                                            width="100%"
+                                                            text="{path: 'tickets>quando', formatter: 'formatter.dataAbertura'}"
+                                                            wrapping="false"
+                                                            textAlign="Begin"
+                                                            class="mwLegenda"/>
+                                                    </VBox>
+                                                </HBox>
+                                                <HBox
+                                                    visible="{= ${tickets>eu} === true }"
+                                                    width="100%"
+                                                    alignItems="Start"
+                                                    justifyContent="End"
+                                                    wrap="NoWrap"
+                                                    class="mwChatLinha sapUiTinyMarginTopBottom">
+                                                    <VBox class="mwChatBolhaSaida">
+                                                        <layoutData>
+                                                            <FlexItemData
+                                                                growFactor="0"
+                                                                shrinkFactor="1"
+                                                                minWidth="0"/>
+                                                        </layoutData>
+                                                        <HBox
+                                                            width="100%"
+                                                            justifyContent="End">
+                                                            <Title
+                                                                titleStyle="H6"
+                                                                text="{tickets>autor}"
+                                                                wrapping="true"/>
+                                                        </HBox>
+                                                        <Text
+                                                            text="{tickets>texto}"
+                                                            wrapping="true"
+                                                            renderWhitespace="true"
+                                                            class="mwChatTextoQuebra"/>
+                                                        <Text
+                                                            width="100%"
+                                                            text="{path: 'tickets>quando', formatter: 'formatter.dataAbertura'}"
+                                                            wrapping="false"
+                                                            textAlign="End"
+                                                            class="mwLegenda"/>
+                                                    </VBox>
+                                                    <VBox width="1rem">
+                                                        <layoutData>
+                                                            <FlexItemData
+                                                                growFactor="0"
+                                                                shrinkFactor="0"/>
+                                                        </layoutData>
+                                                    </VBox>
+                                                    <Avatar
+                                                        displaySize="S"
+                                                        src="sap-icon://employee">
+                                                        <layoutData>
+                                                            <FlexItemData
+                                                                growFactor="0"
+                                                                shrinkFactor="0"/>
+                                                        </layoutData>
+                                                    </Avatar>
+                                                    <VBox width="3rem">
+                                                        <layoutData>
+                                                            <FlexItemData
+                                                                growFactor="0"
+                                                                shrinkFactor="0"/>
+                                                        </layoutData>
+                                                    </VBox>
+                                                </HBox>
+                                            </VBox>
+                                        </CustomListItem>
+                                    </List>
+                                </ScrollContainer>
+                                <!-- Chamado encerrado bloqueia so o envio: o enabled fica no
+                                     FeedInput para a leitura do historico continuar liberada. -->
+                                <FeedInput
+                                    placeholder="{= formatter.chamadoEncerrado(${tickets>status}) ? ${i18n>detalheChatBloqueadoEncerrado} : ${i18n>detalheChatPlaceholder} }"
+                                    buttonTooltip="{i18n>detalheChatEnviar}"
+                                    icon="sap-icon://employee"
+                                    post=".onDetalheEnviarMensagem"
+                                    enabled="{= !formatter.chamadoEncerrado(${tickets>status}) }"
+                                    class="sapUiSmallMarginTop"/>
+                            </VBox>
+                        </VBox>
+                    </f:content>
+                </f:Card>
+                <VBox width="100%">
+                    <layoutData>
+                        <layout:GridData span="XL3 L3 M12 S12"/>
+                    </layoutData>
+                    <f:Card width="100%" class="sapUiSmallMarginBottom">
+                        <f:content>
+                            <VBox width="100%">
+                                <!-- SEM width="100%": mesma armadilha do cabecalho de Anexos - com
+                                     width + as margens de 1rem a caixa estoura 1rem para fora do
+                                     .sapFCardContent (overflow: hidden, sem padding) e o
+                                     SpaceBetween joga a contagem justamente nesse pedaco cortado. -->
+                                <HBox
+                                    justifyContent="SpaceBetween"
+                                    alignItems="Center"
+                                    class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop sapUiTinyMarginBottom">
+                                    <HBox alignItems="Center">
+                                        <core:Icon
+                                            src="sap-icon://history"
+                                            size="1.5rem"
+                                            class="sapUiSmallMarginEnd"/>
+                                        <Title
+                                            text="{i18n>detalheAtividadeRecente}"
+                                            titleStyle="H5"/>
+                                    </HBox>
+                                    <ObjectStatus
+                                        text="{path: 'tickets>historico', formatter: 'formatter.contagem'}"
+                                        state="None"/>
+                                </HBox>
+                                <VBox
+                                    width="100%"
+                                    class="sapUiTinyMarginTop sapUiSmallMarginBottom">
+                                    <suite:Timeline
+                                        id="idTimelineHistorico"
+                                        alignment="Right"
+                                        busy="{= ${tickets>historicoCarregando} === true }"
+                                        busyIndicatorDelay="0"
+                                        sortOldestFirst="false"
+                                        showSearch="false"
+                                        showSort="false"
+                                        showItemFilter="false"
+                                        showHeaderBar="false"
+                                        content="{tickets>historico}">
+                                        <suite:TimelineItem
+                                            dateTime="{path: 'tickets>quando', formatter: 'formatter.dataAbertura'}"
+                                            title="{tickets>autor}"
+                                            text="{tickets>texto}"
+                                            icon="{path: 'tickets>sistema', formatter: 'formatter.historicoIcone'}"/>
+                                    </suite:Timeline>
+                                </VBox>
+                            </VBox>
+                        </f:content>
+                    </f:Card>
+                </VBox>
+            </layout:Grid>
+        </f:content>
+    </f:DynamicPage>
+</core:FragmentDefinition>

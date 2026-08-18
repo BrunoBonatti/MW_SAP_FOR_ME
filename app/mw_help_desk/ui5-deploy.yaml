@@ -1,0 +1,22 @@
+# yaml-language-server: $schema=https://sap.github.io/ui5-tooling/schema/ui5.yaml.json
+
+# Config do build para Cloud Foundry (npm run build); gera o mw_help_desk.zip que o
+# módulo mw-help-desk-app-deployer do mta-help-desk.yaml sobe no HTML5 Repository. Dev local usa o ui5.yaml.
+specVersion: "4.0"
+metadata:
+  name: megawork.mwhelpdesk
+type: application
+builder:
+  resources:
+    excludes:
+      - /test/**
+      - /localService/**
+  customTasks:
+    - name: ui5-task-zipper
+      afterTask: generateCachebusterInfo
+      configuration:
+        archiveName: mw_help_desk
+        additionalFiles:
+          # Fica fora de webapp/, precisa ser incluído à mão; sem ele o HTML5 Repository
+          # não roteia /employee/ para o CAP.
+          - xs-app.json
