@@ -173,6 +173,10 @@ const CUSTOMER_NUMBER_SAP = process.env.SAP_CUSTOMER_NUMBER || "0000832647";
 // Dominio da ALM (CasePost.priority) e enum fechado 1..4; o mapa do C4C manda BAIXA->7 e daria 400.
 const PRIORIDADE_CASO_SAP = { IMEDIATA: "1", URGENTE: "2", NORMAL: "3", BAIXA: "4" };
 
+// O enum CaseStatusCode (CALM_ITSM.json) traz "Confirmed", mas a descricao do mesmo campo escreve
+// 'CONFIRMED': vale o enum, porque e ele que o servidor valida.
+const STATUS_CASO_SAP_ENCERRADO = "Confirmed";
+
 // Teto por pagina imposto pelo spec da ALM.
 const LIMITE_CONTATOS_SAP = 1000;
 
@@ -187,6 +191,16 @@ const MAXIMO_CLIENTES_POR_LOTE_SAP = 5;
 const MAXIMO_PARCEIROS_POR_LOTE_SAP = 50;
 
 const LIMITE_CHAMADOS_SAP = 500;
+
+// O POST de /supportcases/cases devolve so o id: o caseNumber aparece num GET de detalhe que, logo
+// depois do create, ainda pode responder sem numero. Sem os campos Z preenchidos aos DOIS o chamado
+// nunca entra no "Chat com SAP" (a leitura exige numero E id), entao vale insistir aqui - e barato
+// perto de deixar o vinculo capenga. 3 tentativas porque o dialogo do usuario espera esta resposta:
+// mais que isso prenderia a tela por um campo que o backfill das leituras tambem sabe completar.
+const TENTATIVAS_NUMERO_CASO_SAP = 3;
+
+// Espera entre as tentativas do numero. Somada, segura o dialogo por no maximo ~3 s no pior caso.
+const ESPERA_NUMERO_CASO_SAP_MS = 1500;
 
 // Teto do GET de detalhe (1 chamada por caso), nao limite documentado da ALM: o dialogo espera a
 // resposta, e acima disso a tela trunca com aviso em vez de arriscar 429 e minutos de espera.
@@ -614,6 +628,78 @@ async function lerCasosSapCru(calmItsmService, filtros) {
 // pedindo id+reporter na MESMA ordem de query de antes.
 async function lerCasoSapCru(calmItsmService, correlationId, sUser) {
     return lerCasosSapCru(calmItsmService, { id: correlationId, reporter: sUser });
+}
+
+const esperar = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Numero do caso RECEM-CRIADO, com insistencia: o POST devolve so o id e o GET logo em seguida
+// pode responder o caso ainda sem caseNumber. Nunca lanca - o caso ja existe na ALM neste ponto,
+// entao falha aqui e numero pendente (que o backfill das leituras resolve depois), nunca erro do
+// fluxo. Devolve "" quando as tentativas se esgotam.
+async function lerNumeroDoCasoSap(calmItsmService, correlationId, sUser) {
+    for (let tentativa = 1; tentativa <= TENTATIVAS_NUMERO_CASO_SAP; tentativa += 1) {
+        // Espera ANTES da 2a em diante e nunca antes da 1a: o caminho feliz nao paga latencia.
+        if (tentativa > 1) await esperar(ESPERA_NUMERO_CASO_SAP_MS);
+
+        try {
+            const caso = await lerCasoSapCru(calmItsmService, correlationId, sUser);
+            const caseNumber = String(caso?.caseNumber ?? "").trim();
+
+            if (caseNumber) return caseNumber;
+
+            LOG.warn(`Caso ${correlationId} respondeu sem caseNumber na tentativa `
+                + `${tentativa}/${TENTATIVAS_NUMERO_CASO_SAP}.`);
+        } catch (erro) {
+            LOG.warn(`Falha ao ler o numero do caso ${correlationId} na tentativa `
+                + `${tentativa}/${TENTATIVAS_NUMERO_CASO_SAP}: ${erro.message}`);
+        }
+    }
+
+    return "";
+}
+
+// Grava os campos Z do caso SAP no header do chamado no C4C. E este par que amarra chamado e caso:
+// sem ele o caso existe na ALM e nenhuma tela do requisitante sabe disso (as leituras partem do
+// z_id_sfm_KUT do chamado, nunca de um id vindo do navegador). Escrita ACESSORIA, no mesmo desenho
+// de AtualizarComponenteChamado: nunca lanca, porque o caso ja existe na SAP e derrubar o fluxo
+// aqui faria a tela dizer que o chamado nao foi aberto. Devolve true so quando o UPDATE passou.
+// caseNumber vazio NAO cancela a escrita: gravar so o id preserva o vinculo, e o numero e
+// completado depois pelo backfill das leituras.
+async function gravarCasoSapNoChamado(ticketService, objectID, correlationId, caseNumber, contexto) {
+    const chamado = String(objectID ?? "").trim();
+    const id = String(correlationId ?? "").trim();
+    const numero = String(caseNumber ?? "").trim();
+
+    if (!chamado || !id) {
+        LOG.warn(`Vinculo do caso SAP nao gravado (${contexto}): ObjectID "${chamado}" ou `
+            + `correlationId "${id}" ausente.`);
+        return false;
+    }
+
+    // Campo por campo e nao objeto fixo: mandar z_case_number_KUT: "" no backfill APAGARIA o
+    // numero que outra sessao ja tivesse gravado.
+    const campos = { z_id_sfm_KUT: id };
+    if (numero) campos.z_case_number_KUT = numero;
+
+    const { ServiceRequestCollection } = ticketService.entities;
+
+    try {
+        // Mesmo caminho do PATCH do componente: UPDATE ... where(ObjectID) mantem a whitelist de
+        // status do handler UPDATE de ServiceRequests intacta, e o CQN resolve key e CSRF.
+        await ticketService.run(
+            UPDATE(ServiceRequestCollection)
+                .where({ ObjectID: chamado })
+                .with(campos)
+        );
+    } catch (erro) {
+        LOG.warn(`Falha ao gravar o caso ${numero || "(sem numero)"}/${id} no chamado ${chamado} `
+            + `(${contexto}): ${erro.message}`);
+        return false;
+    }
+
+    LOG.info(`Caso SAP ${numero || "(numero pendente)"}/${id} vinculado ao chamado ${chamado} `
+        + `(${contexto}).`);
+    return true;
 }
 
 // Um GET, dois escopos: com reporter (S-User) e sem (escopo ja garantido pelo chamado no C4C).
@@ -2592,6 +2678,8 @@ module.exports = cds.service.impl(async function () {
         const descricao = String(req.data.descricao || "").trim();
         const sUserCliente = String(req.data.sUserCliente || "").trim();
         const sUserRequisitante = String(req.data.sUserRequisitante || "").trim();
+        // ObjectID do chamado no C4C: e a chave do UPDATE que grava os campos Z no fim.
+        const objectID = String(req.data.objectID || "").trim();
 
         // send() cru nao passa pela validacao do CAP: sem isto a ALM devolve 400/428 generico.
         if (!PRIORIDADE_CASO_SAP[prioridade]) {
@@ -2628,6 +2716,14 @@ module.exports = cds.service.impl(async function () {
                 "Informe o S-User do requisitante para abrir o chamado SAP.");
         }
 
+        // Barra ANTES do POST, e nao depois: sem ObjectID o caso nasceria na ALM sem como ser
+        // gravado no chamado, e o POST nao tem chave de deduplicacao para o vinculo ser refeito
+        // numa segunda tentativa - sobraria um caso orfao, invisivel para o requisitante.
+        if (!objectID) {
+            return req.reject(400,
+                "Informe o ObjectID do chamado para vincular o caso aberto no SAP.");
+        }
+
         const corpo = {
             priority: PRIORIDADE_CASO_SAP[prioridade],
             component: componenteId,
@@ -2649,7 +2745,10 @@ module.exports = cds.service.impl(async function () {
         if (process.env.SAP_ABRIR_CASO_SIMULADO === "1") {
             LOG.warn(`Modo simulado de abertura de caso SAP: nenhuma chamada a ALM. `
                 + `Corpo montado: ${JSON.stringify(corpo)}`);
-            return { correlationId: `SIMULADO-${Date.now()}`, caseNumber: "", numeroPendente: true };
+            return {
+                correlationId: `SIMULADO-${Date.now()}`, caseNumber: "",
+                numeroPendente: true, vinculado: false
+            };
         }
 
         let calmItsmService;
@@ -2696,20 +2795,23 @@ module.exports = cds.service.impl(async function () {
                 + "PODE ter sido criado. Confira em Acompanhar chamados SAP antes de tentar de novo.");
         }
 
-        // O POST devolve so o correlationId; o caseNumber so existe no GET. O caso ja existe na
-        // SAP neste ponto, entao rejeitar aqui faria a tela mentir dizendo que nao foi criado.
-        let caseNumber = "";
-        try {
-            const caso = await lerCasoSapCru(calmItsmService, correlationId, sUserRequisitante);
-            caseNumber = String(caso?.caseNumber ?? "").trim();
-        } catch (erro) {
-            LOG.warn(`Caso ${correlationId} criado, mas a leitura do numero falhou: ${erro.message}`);
-        }
+        // O POST devolve so o correlationId; o caseNumber so existe no GET, que logo apos o create
+        // ainda pode responder sem numero - dai as tentativas. O caso ja existe na SAP neste ponto,
+        // entao rejeitar aqui faria a tela mentir dizendo que nao foi criado.
+        const caseNumber = await lerNumeroDoCasoSap(calmItsmService, correlationId,
+            sUserRequisitante);
+
+        // Fecha o vinculo no C4C: e daqui que TODA tela do requisitante descobre que o chamado tem
+        // caso na ALM. Feito no servidor, logo apos o create, e nao numa segunda chamada da tela:
+        // browser fechado no meio deixaria o caso orfao, sem como ser reencontrado.
+        const vinculado = await gravarCasoSapNoChamado(ticketService, objectID, correlationId,
+            caseNumber, `abertura do caso pelo chamado ${objectID}`);
 
         LOG.info(`Caso SAP criado: correlationId ${correlationId}, `
-            + `caseNumber ${caseNumber || "(pendente)"}, componente ${componenteId}`);
+            + `caseNumber ${caseNumber || "(pendente)"}, componente ${componenteId}, `
+            + `chamado ${objectID} ${vinculado ? "vinculado" : "NAO vinculado"}`);
 
-        return { correlationId, caseNumber, numeroPendente: !caseNumber };
+        return { correlationId, caseNumber, numeroPendente: !caseNumber, vinculado };
     });
 
     // Conversa do chat SAP: um GET por clique na lista da esquerda. A chave e o correlationId (o
@@ -2832,12 +2934,13 @@ module.exports = cds.service.impl(async function () {
         const caseNumber = String(linha.z_case_number_KUT ?? "").trim();
         const correlationId = String(linha.z_id_sfm_KUT ?? "").trim();
 
-        // Sem os dois campos Z nao ha caso na ALM para ler - ausencia de campo custom e dado valido
-        // (o chamado nao foi encaminhado a SAP), nao erro. Exige os DOIS porque e assim que a tela
-        // monta a lista, e o header por caseNumber precisa de um e os comentarios do outro.
-        if (!caseNumber || !correlationId) {
-            LOG.warn(`Chamado ${chamadoId} sem z_case_number_KUT/z_id_sfm_KUT `
-                + `("${caseNumber}"/"${correlationId}"): nao ha caso na ALM para ler.`);
+        // Sem o z_id_sfm_KUT nao ha caso na ALM para ler - ausencia de campo custom e dado valido
+        // (o chamado nao foi encaminhado a SAP), nao erro. So o ID e exigido: ele e a chave do GET
+        // de header E a dos comentarios, e o numero pode estar pendente num caso recem-aberto -
+        // barrar por ele deixaria a conversa inacessivel justamente ate alguem completar o campo.
+        if (!correlationId) {
+            LOG.warn(`Chamado ${chamadoId} sem z_id_sfm_KUT ("${caseNumber}"/"${correlationId}"): `
+                + `nao ha caso na ALM para ler.`);
             return vazio;
         }
 
@@ -2861,7 +2964,12 @@ module.exports = cds.service.impl(async function () {
         // Header NAO derruba a conversa, e o log diz qual dos dois serviu.
         let caso = null;
         let headerPorOnde = "";
-        for (const filtro of [{ id: correlationId }, { caseNumber }]) {
+        // Segunda tentativa so quando ha numero: { caseNumber: "" } consultaria a ALM sem chave.
+        const filtrosDoHeader = caseNumber
+            ? [{ id: correlationId }, { caseNumber }]
+            : [{ id: correlationId }];
+
+        for (const filtro of filtrosDoHeader) {
             const rotulo = filtro.caseNumber ? "caseNumber" : "id";
             try {
                 const resposta = await lerCasosSapCru(calmItsmService, filtro);
@@ -2883,8 +2991,13 @@ module.exports = cds.service.impl(async function () {
                 // tenant ignorar o parametro nao suportado, ou se o campo Z do chamado apontar para
                 // outro caso, a ALM devolve um caso de OUTRO cliente e a tela mostraria o numero, o
                 // assunto e o status dele no cabecalho - com as bolhas certas, o que esconde o erro.
-                if (String(achado.caseNumber ?? "").trim() !== caseNumber
-                    && String(achado.id ?? "").trim() !== correlationId) {
+                // Boolean(caseNumber) na frente: com o numero pendente ("") um caso que voltasse
+                // TAMBEM sem numero casaria "" === "" e passaria sem nenhuma conferencia de chave.
+                const numeroBate = Boolean(caseNumber)
+                    && String(achado.caseNumber ?? "").trim() === caseNumber;
+                const idBate = String(achado.id ?? "").trim() === correlationId;
+
+                if (!numeroBate && !idBate) {
                     LOG.warn(`ALM devolveu o caso ${achado.caseNumber || "<sem numero>"}/`
                         + `${achado.id || "<sem id>"} para o filtro ${rotulo} do caso `
                         + `${caseNumber}/${correlationId}: header descartado.`);
@@ -2898,6 +3011,16 @@ module.exports = cds.service.impl(async function () {
                 LOG.warn(`Falha ao ler o header do caso ${caseNumber}/${correlationId} por `
                     + `${rotulo}: ${erro.message}`);
             }
+        }
+
+        // BACKFILL do numero: caso aberto cujo GET do numero falhou na hora ficou so com o
+        // z_id_sfm_KUT, e o header que acabou de ser lido tem o que falta. Gravar aqui e o que
+        // impede o chamado de ficar para sempre com meio vinculo. await de proposito: e uma
+        // escrita rara (so quando o campo esta vazio) e soltar a promise engoliria a falha.
+        const numeroDoHeader = String(caso?.caseNumber ?? "").trim();
+        if (!caseNumber && numeroDoHeader) {
+            await gravarCasoSapNoChamado(ticketService, String(linha.ObjectID ?? ""), correlationId,
+                numeroDoHeader, `backfill do numero na conversa do chamado ${chamadoId}`);
         }
 
         // Comentarios sao o essencial da resposta, entao aqui e reject, igual a ComentariosCasoSap.
@@ -2915,7 +3038,8 @@ module.exports = cds.service.impl(async function () {
         const conversa = comentariosCasoSapComoResposta(respostaComentarios);
         const texto = (valor) => String(valor ?? "");
 
-        LOG.info(`Conversa do chamado ${chamadoId} (caso ${caseNumber}/${correlationId}, escopo `
+        LOG.info(`Conversa do chamado ${chamadoId} (caso `
+            + `${caseNumber || numeroDoHeader || "(sem numero)"}/${correlationId}, escopo `
             + `${campoEscopo}=${contatoId}): header por ${headerPorOnde || "nenhum"}, `
             + `${conversa.exibidos}/${conversa.total} comentarios em ${Date.now() - inicio} ms.`);
 
@@ -3016,9 +3140,11 @@ module.exports = cds.service.impl(async function () {
                     const correlationId = String(linha?.z_id_sfm_KUT ?? "").trim();
                     const caseNumber = String(linha?.z_case_number_KUT ?? "").trim();
 
-                    // Exige os DOIS campos Z, igual a ConversaCasoSapDoChamado, e o ID: e ele a
-                    // chave de casamento com a linha que a tela ja pintou.
-                    if (!chave || !chamadoId || !correlationId || !caseNumber) continue;
+                    // Exige o z_id_sfm_KUT e o ID (a chave de casamento com a linha que a tela ja
+                    // pintou), igual a ConversaCasoSapDoChamado. O numero NAO entra na exigencia:
+                    // chamado com id e sem numero e exatamente quem precisa do backfill la embaixo,
+                    // e descarta-lo aqui deixaria o campo vazio para sempre.
+                    if (!chave || !chamadoId || !correlationId) continue;
                     if (vistos.has(chave)) continue;
 
                     vistos.add(chave);
@@ -3026,6 +3152,9 @@ module.exports = cds.service.impl(async function () {
                     candidatos.push({
                         chamadoId,
                         correlationId,
+                        caseNumber,
+                        // Chave do UPDATE do backfill; o ID visivel nao acha o header no C4C.
+                        objectID: String(linha?.ObjectID ?? "").trim(),
                         criadoEm: paraMs(linha?.CreationDateTime) ?? 0
                     });
                 }
@@ -3097,7 +3226,31 @@ module.exports = cds.service.impl(async function () {
             }
         });
 
+        // 5) BACKFILL DO NUMERO. Chamado cujo z_case_number_KUT ficou vazio na abertura (o GET do
+        // numero falhou naquele momento) ja teve o caso lido no enriquecimento acima: grava o
+        // numero agora, de graca, em vez de deixar o vinculo pela metade. Em SERIE e nao no
+        // trabalhador: sao poucas linhas (so as pendentes) e a escrita no C4C nao pode disputar
+        // vaga com as leituras da ALM.
+        let numerosGravados = 0;
+        for (let indice = 0; indice < selecionados.length; indice += 1) {
+            const { objectID, caseNumber, correlationId, chamadoId } = selecionados[indice];
+            const numero = String(conversas[indice]?.caseNumber ?? "").trim();
+
+            // Ja tem numero, o caso nao foi lido, ou nao ha chave para o UPDATE: nada a fazer.
+            if (caseNumber || !numero || !objectID) continue;
+
+            if (await gravarCasoSapNoChamado(ticketService, objectID, correlationId, numero,
+                `backfill do numero na lista de conversas do chamado ${chamadoId}`)) {
+                numerosGravados += 1;
+            }
+        }
+
         const exibidos = conversas.filter((conversa) => conversa && !conversa.falha).length;
+
+        if (numerosGravados) {
+            LOG.info(`Backfill do z_case_number_KUT em ${numerosGravados} chamado(s) de `
+                + `${campoEscopo}=${contatoId}.`);
+        }
 
         LOG.info(`Conversas SAP de ${campoEscopo}=${contatoId}: ${exibidos}/${total} enriquecidos `
             + `(${conversas.length} lidos, truncado=${truncado}) em ${Date.now() - inicio} ms.`);
@@ -3566,6 +3719,85 @@ module.exports = cds.service.impl(async function () {
                 criadoPor: sUser
             }
         };
+    });
+
+    // Encerramento do caso: 1 PATCH, mesma chave do chat (o correlationId, nunca o caseNumber).
+    // O caminho REAL nunca foi exercitado - o tenant e PRODUTIVO e Confirmed fecha caso de cliente
+    // sem desfazer, entao a validacao saiu toda pelo SAP_ENCERRAR_CASO_SIMULADO.
+    this.on("EncerrarCasoSap", async (req) => {
+        const correlationId = String(req.data.correlationId || "").trim();
+        const sUser = String(req.data.sUser || "").trim();
+
+        // send() cru nao passa pela validacao do CAP: sem isto a ALM devolve 400/428 generico.
+        if (!correlationId) {
+            return req.reject(400,
+                "Informe o correlationId do caso para encerrar.");
+        }
+
+        // reporter e required no PATCH: vazio agiria fora de escopo ou daria 428.
+        if (!sUser) {
+            return req.reject(400,
+                "Informe o S-User do requisitante para encerrar o caso.");
+        }
+
+        const corpo = { status: STATUS_CASO_SAP_ENCERRADO };
+
+        // Flag propria, como nas irmas: quem testa encerramento nao quer travar tambem os envios.
+        if (process.env.SAP_ENCERRAR_CASO_SIMULADO === "1") {
+            LOG.warn(`Modo simulado de encerramento do caso SAP ${correlationId}: nenhuma chamada a `
+                + `ALM. Corpo montado: ${JSON.stringify(corpo)}`);
+            return { correlationId, status: STATUS_CASO_SAP_ENCERRADO };
+        }
+
+        const parametros = new URLSearchParams({ id: correlationId, reporter: sUser });
+
+        let resposta;
+        try {
+            const calmItsmService = await conectarCalmItsm();
+            // Corpo vai em data: no kind rest a chave "body" seria ignorada pelo send().
+            resposta = await calmItsmService.send({
+                method: "PATCH",
+                path: `/supportcases/cases?${parametros}`,
+                data: corpo
+            });
+        } catch (erro) {
+            // O cliente rest do CAP embrulha tudo em statusCode 502 e joga a resposta original em
+            // reason: ler erro.status/erro.response aqui daria 502 em toda falha (client.js:200).
+            const respostaErro = erro?.reason?.response;
+            const mensagem = respostaErro?.body?.error?.message || erro.message;
+            LOG.warn(`Falha ao encerrar o caso SAP ${correlationId} `
+                + `(reporter ${sUser}): ${mensagem}`);
+
+            const status = Number(respostaErro?.status ?? erro?.status ?? 0);
+
+            // 403 do patchCase nao e erro do app: a ALM so libera mudanca de status quando o caso
+            // esta em Customer Action / Partner-Customer Action, e o usuario precisa saber disso.
+            if (status === 403) {
+                return req.reject(403, "SAP Cloud ALM so permite encerrar o caso quando ele esta "
+                    + `em "Customer Action" ou "Partner-Customer Action". ${mensagem}`);
+            }
+
+            if (status === 400 || status === 428) {
+                return req.reject(400,
+                    `SAP Cloud ALM recusou o encerramento: ${mensagem}`);
+            }
+
+            if (status === 429) {
+                return req.reject(429,
+                    "SAP Cloud ALM esta limitando as requisicoes. Aguarde e tente novamente.");
+            }
+
+            return req.reject(502,
+                `Nao foi possivel encerrar o caso no SAP Cloud ALM: ${mensagem}`);
+        }
+
+        // Id vazio nao reabre o caso: ecoar a chave e melhor que a tela dizer que nao encerrou.
+        const idCaso = String(resposta?.id ?? "").trim() || correlationId;
+
+        LOG.info(`Caso SAP ${idCaso} encerrado (reporter ${sUser}, status `
+            + `${STATUS_CASO_SAP_ENCERRADO}).`);
+
+        return { correlationId: idCaso, status: STATUS_CASO_SAP_ENCERRADO };
     });
 
     // Mesmo escopo da lista da tela, sem o teto de 100 dela: sem o contato a varredura viraria o

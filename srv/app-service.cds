@@ -176,12 +176,20 @@ service IntegrationService {
     titulo             : String,
     descricao          : String,
     sUserCliente       : String,
-    sUserRequisitante  : String
+    sUserRequisitante  : String,
+    // ObjectID do chamado no C4C que originou o caso: chave do UPDATE que grava z_id_sfm_KUT e
+    // z_case_number_KUT no header. Obrigatorio e conferido ANTES do POST - caso criado sem o
+    // vinculo seria invisivel para o requisitante e o POST nao tem como ser refeito.
+    objectID           : String
   ) returns {
     correlationId  : String;
     caseNumber     : String;
-    // GET de leitura do numero falhou ou veio vazio: o caso EXISTE, so o numero nao chegou.
+    // GET de leitura do numero falhou ou veio vazio depois das tentativas: o caso EXISTE e o
+    // z_id_sfm_KUT ja foi gravado, so o numero nao chegou (o backfill das leituras o completa).
     numeroPendente : Boolean;
+    // Campos Z gravados no chamado. false = o caso existe na ALM e o chamado no C4C nao aponta
+    // para ele: a tela avisa, porque so um retoque manual no C4C fecha esse vinculo.
+    vinculado      : Boolean;
   };
 
   // installationNbr/systemNbr sao o dado util do chamado; o resto so orienta o usuario na ajuda de valor.
@@ -464,6 +472,20 @@ service IntegrationService {
     correlationId : String;
     // idAnexo volta vazio: o POST de vinculo devolve so o id do CASO, e a tela rele a lista.
     anexo         : AnexoCasoSap;
+  };
+
+  // Action e nao function pelo mesmo motivo das irmas: function vira GET repetivel no OData V4 e
+  // este PATCH nao tem desfazer - status Confirmed encerra o caso REAL no backbone da SAP.
+  action EncerrarCasoSap(
+    correlationId : String,
+    sUser         : String
+  ) returns {
+    // Eco do CaseIdResponse.id: a tela casa a resposta com o caso aberto no detalhe.
+    correlationId : String;
+    // Eco do status ENVIADO, nao do que a ALM gravou: serve de rastro no log e para o chamador
+    // conferir o literal que saiu. A tela nao le este campo de proposito - ela rele o detalhe,
+    // porque so a ALM sabe o status e o closedAt reais depois do PATCH.
+    status        : String;
   };
 
   // z_customer_number_KUT vem do BuyerPartyID (BusinessPartnerCollection), nunca do chamado.

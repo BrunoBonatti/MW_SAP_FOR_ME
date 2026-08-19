@@ -546,6 +546,14 @@ sap.ui.define([
             this._limparCasosSap();
             this._renderizarCockpit([]);
 
+            // Notificacao e por identidade (o piso do badge e gravado por e-mail no backend),
+            // entao o estado do perfil anterior nao vale para o novo. Remonta na hora: sem isso o
+            // sino e o popover ficariam com as linhas do anterior ate o poll voltar - ou para
+            // sempre, se _carregarRequisitante devolver false.
+            this._oTicketsComNotificacao = new Set();
+            this._mUltimaMensagemPorTicket = new Map();
+            this._montarChatLista();
+
             // _carregarRequisitante trata o proprio erro (nunca rejeita), entao a cadeia segue e
             // os botoes sempre voltam a ficar clicaveis. Quando ele devolve false ja mostrou o
             // popup de bloqueio - seguir daria a mesma busca sem filtro que a guarda do onInit evita.
@@ -1056,6 +1064,180 @@ sap.ui.define([
                 });
         },
 
+        // Unica escrita destrutiva da tela: o PATCH com status Confirmed encerra o caso REAL do
+        // cliente na ALM e nao tem volta (nao existe reabrir pela API), por isso a confirmacao vem
+        // ANTES de qualquer chamada. O caminho real NUNCA foi exercitado - o tenant ligado a este
+        // app e produtivo - e a validacao saiu toda pelo modo simulado do backend
+        // (SAP_ENCERRAR_CASO_SIMULADO=1), que monta o corpo e nao chama a ALM.
+        onDetalheSapEncerrarCaso() {
+            const oModelo = this._modeloCasoSap();
+            const oBundle = this._getResourceBundle();
+            const sCorrelationId = String(oModelo.getProperty("/correlationId") ?? "").trim();
+
+            // Toast como nos outros handlers do detalhe SAP: sem a chave nao ha caso a encerrar.
+            if (!sCorrelationId) {
+                MessageToast.show(oBundle.getText("chatsSapCasoSemCorrelationId"));
+
+                return;
+            }
+
+            // Trava aqui e nao so em /carregando: o busy da pagina liga depois do OK e nao cobre a
+            // espera do S-User (a promise memoizada e zerada em falha, entao ela volta a ser
+            // round-trip). Sem isto, dois cliques empilham dois dialogos e dois PATCH sem chave de
+            // deduplicacao. Mesma trava do _bAbrindoCasoSap na abertura.
+            if (this._bEncerrandoCasoSap) {
+                return;
+            }
+
+            this._bEncerrandoCasoSap = true;
+
+            // S-User lido no clique, nunca cacheado em campo do controller: o toggle de e-mail dev
+            // troca o requisitante e o PATCH exige reporter=<S-User>. A promise e memoizada, entao
+            // isso nao custa round-trip extra.
+            this._lerSUserRequisitante().then((oResultado) => {
+                const sSUser = String(oResultado?.sUser ?? "").trim();
+
+                // Voltou e abriu outro caso durante a espera: encerrar agora fecharia o caso errado.
+                if (oModelo.getProperty("/correlationId") !== sCorrelationId) {
+                    this._bEncerrandoCasoSap = false;
+
+                    return;
+                }
+
+                // MessageBox e nao toast: aqui o usuario clicou pedindo o encerramento e ficaria sem
+                // entender por que nada aconteceu.
+                if (!sSUser) {
+                    Log.warning("Encerramento do caso " + sCorrelationId
+                        + " ignorado: requisitante sem S-User", null,
+                        "megawork.mwmonitorchamados.controller.Main");
+                    MessageBox.error(oBundle.getText("detalheSapEncerrarCasoSemSUser"));
+                    this._bEncerrandoCasoSap = false;
+
+                    return;
+                }
+
+                // Uma frase so no dialogo: o paragrafo explicando o encerramento deixava o popup
+                // grande e ninguem le aviso longo antes de clicar. caseNumber e o numero que o
+                // usuario reconhece na tela; sem ele (ALM que nao devolveu) cai no correlationId
+                // para a pergunta nunca sair sobre "o ticket ".
+                const sCaso = String(oModelo.getProperty("/caso/caseNumber") ?? "").trim()
+                    || sCorrelationId;
+
+                MessageBox.confirm(oBundle.getText("detalheSapEncerrarCasoConfirmarTexto", [sCaso]), {
+                    title: oBundle.getText("detalheSapEncerrarCasoConfirmarTitulo"),
+                    // Confirmar em destaque e Cancelar no foco: o Enter distraido no dialogo nao
+                    // pode fechar um caso real de cliente sem desfazer.
+                    actions: [MessageBox.Action.OK, MessageBox.Action.CANCEL],
+                    emphasizedAction: MessageBox.Action.OK,
+                    initialFocus: MessageBox.Action.CANCEL,
+                    // Toda saida sem PATCH solta a trava aqui: o finally da cadeia so roda no
+                    // caminho confirmado, e sem isto o botao ficaria morto ate recarregar a tela.
+                    onClose: (sAcao) => {
+                        if (sAcao !== MessageBox.Action.OK) {
+                            this._bEncerrandoCasoSap = false;
+
+                            return;
+                        }
+
+                        // O dialogo nao bloqueia a navegacao: dava para voltar e abrir outro caso
+                        // antes do OK, e o PATCH sairia contra a tela que nao esta mais aberta.
+                        if (oModelo.getProperty("/correlationId") !== sCorrelationId) {
+                            this._bEncerrandoCasoSap = false;
+
+                            return;
+                        }
+
+                        let oOperation = null;
+
+                        // A DynamicPage e busy em /carregando: trava a tela toda e com isso o
+                        // segundo clique no botao nao chega a sair - o PATCH nao tem chave de
+                        // deduplicacao.
+                        oModelo.setProperty("/carregando", true);
+
+                        Promise.resolve()
+                            .then(() => {
+                                // $direct como as outras escritas SAP: no $batch $auto o
+                                // encerramento ficaria atras da carga da lista do C4C.
+                                oOperation = this.getOwnerComponent().getModel()
+                                    .bindContext("/EncerrarCasoSap(...)", null, { $$groupId: "$direct" });
+                                oOperation.setParameter("correlationId", sCorrelationId);
+                                oOperation.setParameter("sUser", sSUser);
+
+                                return oOperation.invoke();
+                            })
+                            .then(() => {
+                                // Desfecho do caso abandonado apareceria como aviso do caso na tela.
+                                if (oModelo.getProperty("/correlationId") !== sCorrelationId) {
+                                    return null;
+                                }
+
+                                MessageToast.show(oBundle.getText("detalheSapEncerrarCasoSucesso"));
+
+                                // Releitura e nao palpite local: quem decide o status e o closedAt
+                                // do caso e a ALM, e ela pode devolver algo diferente do Confirmed
+                                // que enviamos. Retornada na cadeia para o busy so soltar no fim.
+                                return this._lerDetalheCasoSap(sCorrelationId, sSUser);
+                            })
+                            .catch((oError) => {
+                                Log.error("Falha ao encerrar o caso SAP " + sCorrelationId, oError,
+                                    "megawork.mwmonitorchamados.controller.Main");
+
+                                if (oModelo.getProperty("/correlationId") !== sCorrelationId) {
+                                    return;
+                                }
+
+                                // Mesma separacao de _falhaAoAbrirCasoSap: 400/403/428/429 provam
+                                // que a ALM recusou ANTES de gravar (403 = caso fora de Customer
+                                // Action, 429 = limite), e ai o caso segue aberto. Timeout e 5xx
+                                // podem ter encerrado, e afirmar "nao foi possivel" ali faz o
+                                // usuario reclicar e receber o 403 de um caso JA encerrado.
+                                const iStatus = Number(oError?.status ?? 0);
+                                const bRecusado = iStatus === 400 || iStatus === 403
+                                    || iStatus === 428 || iStatus === 429;
+
+                                // Manchete traduzida sempre na frente, com o detalhe da SAP embaixo:
+                                // e ela que diz o que fazer, e o texto cru do OData sozinho nao
+                                // menciona nem o encerramento.
+                                const sManchete = oBundle.getText(bRecusado
+                                    ? "detalheSapEncerrarCasoErro"
+                                    : "detalheSapEncerrarCasoErroIncerto");
+                                const sDetalhe = String(oError?.message ?? "").trim();
+
+                                MessageBox[bRecusado ? "error" : "warning"](sDetalhe
+                                    ? sManchete + "\n\n" + sDetalhe
+                                    : sManchete);
+
+                                // Releitura so no desfecho incerto: e a ALM que sabe se o PATCH
+                                // pegou, e sem isso a tela continua mostrando "Encerrar caso" num
+                                // caso que pode ja estar fechado. Na recusa nada mudou la.
+                                if (!bRecusado) {
+                                    return this._lerDetalheCasoSap(sCorrelationId, sSUser);
+                                }
+
+                                return null;
+                            })
+                            .finally(() => {
+                                // Sem isto a tela fica travada em busy no erro. Guarda de caso
+                                // corrente porque a releitura do caso novo pode estar em voo.
+                                if (oModelo.getProperty("/correlationId") === sCorrelationId) {
+                                    oModelo.setProperty("/carregando", false);
+                                }
+
+                                this._bEncerrandoCasoSap = false;
+                                oOperation?.destroy();
+                            });
+                    }
+                });
+            }).catch((oError) => {
+                // Falha ao descobrir o S-User: nada foi enviado a ALM, mas a trava tem de sair
+                // daqui - o finally da cadeia do PATCH nunca chega a rodar neste caminho.
+                Log.error("Falha ao preparar o encerramento do caso SAP " + sCorrelationId, oError,
+                    "megawork.mwmonitorchamados.controller.Main");
+                MessageBox.error(oBundle.getText("detalheSapEncerrarCasoSemSUser"));
+                this._bEncerrandoCasoSap = false;
+            });
+        },
+
         // Clique num item da lista de recentes do cockpit. O item vem do modelo "view" (dados crus
         // do C4C, sem ObjectID e fora do modelo do detalhe), entao aqui a linha equivalente e
         // reencontrada em tickets>/Tickets pela ID antes de abrir o detalhe.
@@ -1303,10 +1485,17 @@ sap.ui.define([
 
             const aChatLista = aTickets.map((oTicket) => ({
                 id: oTicket.ID,
-                nome: oTicket.titulo,
+                // Chamado sem assunto no C4C existe (Name vazio): com o title vazio o
+                // StandardListItem descarta a description junto e a linha sai so com icone e
+                // data. Trim porque Name com espaco e "vazio" na tela, mas passaria pelo ||.
+                nome: String(oTicket.titulo ?? "").trim() || ("#" + oTicket.ID),
                 departamento: oTicket.statusTexto,
                 ultimaMensagem: oTicket.statusTexto,
-                dataHora: oTicket.dataAbertura,
+                // Data da ULTIMA MENSAGEM (o evento que acende o sino) quando o poll ja a
+                // trouxe; abertura como fallback (primeira pintura, rodada de semeadura e
+                // chamado cortado pelo teto do lote no backend, que vem sem a data).
+                dataHora: this._mUltimaMensagemPorTicket?.get(String(oTicket.ID ?? "").trim())
+                    || oTicket.dataAbertura,
                 // ServiceRequestUserLifeCycleStatusCode cru (nao o texto): e o que
                 // formatter.chamadoEncerrado espera, ver Chats.fragment.xml (FeedInput
                 // enabled/placeholder) e _enviarMensagemDoChat.
@@ -1314,12 +1503,14 @@ sap.ui.define([
                 // Alimenta o Avatar da linha (iniciais + cor determinística por requisitante,
                 // ver formatter.iniciaisRequisitante/corAvatarRequisitante).
                 requisitante: oTicket.buyerMainContactPartyName,
-                naoLidas: oComNotificacao.has(oTicket.ID) ? 1 : 0
+                // ID TRIMADO: os ticketIds do backend ja vem trimados, entao comparar com o ID
+                // cru do C4C perderia a notificacao de um ID com espaco.
+                naoLidas: oComNotificacao.has(String(oTicket.ID ?? "").trim()) ? 1 : 0
             }))
                 // Com mensagem nova sempre primeiro (naoLidas 1 antes de 0); dentro do mesmo
-                // grupo, mais recente primeiro pela data do chamado - unico "ultima interacao"
-                // barato que a lista tem sem GET extra por chamado (ver comentario de
-                // _verificarNotificacoesChats sobre o custo de checar nota/interacao 1 a 1).
+                // grupo, mais recente primeiro por dataHora - ultima mensagem quando o poll a
+                // trouxe, abertura no resto (as duas normalizadas em ISO local, senao a
+                // comparacao de string erraria pelo offset).
                 .sort((oA, oB) => (oB.naoLidas - oA.naoLidas)
                     || String(oB.dataHora ?? "").localeCompare(String(oA.dataHora ?? "")));
 
@@ -1337,6 +1528,9 @@ sap.ui.define([
         _verificarNotificacoesChats() {
             const oTicketsModel = this.getOwnerComponent().getModel("tickets");
             const aTickets = oTicketsModel.getProperty("/Tickets") ?? [];
+            // Identidade desta rodada: o lote leva segundos (2 GETs no C4C por chamado, 6 em
+            // paralelo) e passa facil da troca de perfil, que e bem mais rapida.
+            const iGeracaoRequisitante = this._iGeracaoRequisitante;
 
             const aChamados = aTickets
                 .map((oTicket) => ({ ticketId: oTicket.ID, objectID: oTicket.objectID }))
@@ -1344,6 +1538,7 @@ sap.ui.define([
 
             if (!aChamados.length) {
                 this._oTicketsComNotificacao = new Set();
+                this._mUltimaMensagemPorTicket = new Map();
                 this._montarChatLista();
                 return Promise.resolve();
             }
@@ -1359,14 +1554,37 @@ sap.ui.define([
                 return oOperation.invoke()
                     .then(() => oOperation.getBoundContext().requestObject());
             }).then((oResultado) => {
+                // Resposta do e-mail ANTERIOR: aplicar aqui desfaria o reset de
+                // _selecionarEmailDev e acenderia o sino pelo piso de visualizacao de outra
+                // identidade. A carga nova ja dispara o proprio poll ao publicar /Tickets.
+                if (iGeracaoRequisitante !== this._iGeracaoRequisitante) {
+                    return;
+                }
+
                 this._oTicketsComNotificacao = new Set(oResultado?.ticketIds ?? []);
+                // A resposta ja traz, por chamado, QUANDO foi a ultima mensagem - a lista mostra
+                // essa data no lugar da abertura. Normaliza com _paraIsoLocal porque o backend
+                // manda UTC com Z e dataAbertura e ISO local sem offset: _montarChatLista ordena
+                // comparando as duas como string.
+                this._mUltimaMensagemPorTicket = new Map(
+                    (oResultado?.chamados ?? [])
+                        .filter((oItem) => oItem?.ticketId && oItem.ultimaMensagemEm)
+                        .map((oItem) => [String(oItem.ticketId).trim(),
+                            this._paraIsoLocal(oItem.ultimaMensagemEm)])
+                );
                 this._sincronizarChatAbertoComNotificacao();
                 this._montarChatLista();
             }).catch((oError) => {
                 Log.error("Falha ao verificar mensagens novas dos chamados", oError,
                     "megawork.mwmonitorchamados.controller.Main");
 
+                // Falha da identidade anterior nao apaga o que o poll da nova ja publicou.
+                if (iGeracaoRequisitante !== this._iGeracaoRequisitante) {
+                    return;
+                }
+
                 this._oTicketsComNotificacao = new Set();
+                this._mUltimaMensagemPorTicket = new Map();
                 this._montarChatLista();
             }).finally(() => {
                 oOperation.destroy();
@@ -3870,6 +4088,14 @@ sap.ui.define([
             this.byId("dialogAbrirChamadoSap")?.close();
         },
 
+        // Guarda repetida a cada await do envio: reabrir o dialogo reusa o MESMO JSONModel, entao
+        // sem conferir a identidade de quem clicou (e se o dialogo continua aberto) o envio pendente
+        // seguiria com os dados meio digitados do outro chamado.
+        _dialogoDoCasoSapMudou(sOrigemId) {
+            return String(this._modeloChamadoSap().getProperty("/origemId") ?? "").trim() !== sOrigemId
+                || this.byId("dialogAbrirChamadoSap")?.isOpen() !== true;
+        },
+
         // Chaves = nomes dos parametros da action AbrirCasoSap. sUserCliente vem de /sUser (rotulo
         // "S-User Cliente") e sUserRequisitante de /sUserLogado: trocar os dois abre o caso no nome errado.
         _dadosCasoSapDoDialogo(oDados) {
@@ -3951,8 +4177,7 @@ sap.ui.define([
                 // mandaria customerNumber/reporter vazios e a SAP recusaria com 400 generico.
                 await this._pClienteChamadoSap;
 
-                if (String(oModelo.getProperty("/origemId") ?? "").trim() !== sOrigemId
-                    || this.byId("dialogAbrirChamadoSap")?.isOpen() !== true) {
+                if (this._dialogoDoCasoSapMudou(sOrigemId)) {
                     Log.warning("Abertura de chamado SAP abandonada: o dialogo mudou durante a espera",
                         sOrigemId, "megawork.mwmonitorchamados.controller.Main");
                     return;
@@ -3977,7 +4202,35 @@ sap.ui.define([
 
                 // Alvo do PATCH congelado junto do payload: o dialogo pode trocar de chamado
                 // enquanto o POST corre, e reler o modelo depois acertaria o header errado.
-                const sObjectID = String(oModelo.getProperty("/objectID") ?? "").trim();
+                let sObjectID = String(oModelo.getProperty("/objectID") ?? "").trim();
+
+                // Chamado criado nesta sessao pode ter entrado na lista sem ObjectID (a resposta do
+                // create do C4C nao o traz). O backend agora RECUSA a abertura sem ele, porque e a
+                // chave que grava o caso no chamado - resolver aqui evita barrar o usuario por um
+                // campo que a tela sabe buscar sozinha.
+                if (!sObjectID && sOrigemId) {
+                    const oTicketsModel = this.getOwnerComponent().getModel("tickets");
+
+                    sObjectID = String(await this._resolverObjectIDdoTicket(oTicketsModel,
+                        this._pathDoChamadoPorId(oTicketsModel, sOrigemId), sOrigemId) ?? "").trim();
+
+                    // O dialogo pode ter trocado de chamado durante a consulta, e o envio sairia
+                    // contra o chamado errado.
+                    if (this._dialogoDoCasoSapMudou(sOrigemId)) {
+                        Log.warning("Abertura de chamado SAP abandonada: o dialogo mudou durante a "
+                            + "resolucao do ObjectID", sOrigemId,
+                            "megawork.mwmonitorchamados.controller.Main");
+                        return;
+                    }
+                }
+
+                // Antes do POST e nao depois: sem o ObjectID o caso nasceria na SAP sem como ser
+                // gravado no chamado, e o POST nao tem como ser refeito para consertar o vinculo.
+                if (!sObjectID) {
+                    MessageBox.error(oBundle.getText("abrirChamadoSapErroSemChamado"));
+                    return;
+                }
+
                 const sComponenteOriginal = String(oModelo.getProperty("/componenteSapOriginal") ?? "").trim();
                 // Congelado com o resto: o setData da proxima abertura zeraria /anexos no meio do envio.
                 const aAnexos = (oModelo.getProperty("/anexos") ?? []).slice();
@@ -3997,12 +4250,18 @@ sap.ui.define([
                 oOperation.setParameter("descricao", oCaso.descricao);
                 oOperation.setParameter("sUserCliente", oCaso.sUserCliente);
                 oOperation.setParameter("sUserRequisitante", oCaso.sUserRequisitante);
+                // Chave do vinculo: e com ela que o backend grava z_id_sfm_KUT/z_case_number_KUT
+                // no header do chamado assim que o caso nasce na ALM.
+                oOperation.setParameter("objectID", sObjectID);
 
                 await oOperation.invoke();
 
                 const oResultado = await oOperation.getBoundContext().requestObject();
                 const sCorrelationId = String(oResultado?.correlationId ?? "").trim();
                 const sCaseNumber = String(oResultado?.caseNumber ?? "").trim();
+                // Caso criado na ALM que NAO ficou gravado no chamado: so um retoque manual no C4C
+                // fecha esse vinculo, entao o usuario precisa saber - o resto do fluxo deu certo.
+                const bVinculado = oResultado?.vinculado === true;
 
                 // Sem a referencia nao ha como reabrir o caso: avisa que ele PODE existir em vez de
                 // dar sucesso mudo, porque um novo envio as cegas duplicaria o registro na SAP.
@@ -4028,7 +4287,7 @@ sap.ui.define([
                         oCaso.installationNumber, aAnexos);
 
                 this._concluirCasoSapCriado(sCorrelationId, sCaseNumber, sResultadoComponente,
-                    aAnexos.length, oEnvioAnexos);
+                    aAnexos.length, oEnvioAnexos, bVinculado);
             } catch (oError) {
                 this._falhaAoAbrirCasoSap(oError);
             } finally {
@@ -4065,7 +4324,7 @@ sap.ui.define([
         // So depois do caso existir na SAP: em erro o dialogo fica aberto para nao jogar fora o
         // texto digitado, e o caseNumber vazio nao invalida nada - o caso ja foi criado.
         _concluirCasoSapCriado(sCorrelationId, sCaseNumber, sResultadoComponente, iTotalAnexos,
-            oEnvioAnexos) {
+            oEnvioAnexos, bVinculado) {
             const oBundle = this._getResourceBundle();
 
             this.byId("dialogAbrirChamadoSap")?.close();
@@ -4085,11 +4344,22 @@ sap.ui.define([
                 sTextoFinal += "\n\n" + sAdendoAnexo;
             }
 
+            // Modo simulado do backend nao escreve no C4C de proposito, entao aqui vinculado e
+            // sempre false e o aviso seria mentira.
+            const bVinculoFalhou = !bVinculado && !sCorrelationId.startsWith("SIMULADO-");
+
+            if (bVinculoFalhou) {
+                sTextoFinal += "\n\n" + oBundle.getText("abrirChamadoSapVinculoErro");
+            }
+
             // Anexo que nao subiu exige acao (reenviar pelo chat), entao verde mentiria; o numero do
             // caso continua no texto porque o caso EXISTE. Componente com erro segue no success.
-            MessageBox[sAdendoAnexo ? "warning" : "success"](sTextoFinal);
+            // Vinculo perdido tambem exige acao (gravar os campos Z na mao no C4C), senao o caso
+            // fica invisivel no "Chat com SAP" do requisitante.
+            MessageBox[sAdendoAnexo || bVinculoFalhou ? "warning" : "success"](sTextoFinal);
 
-            Log.info("Caso SAP aberto", sCorrelationId + " / " + (sCaseNumber || "(numero pendente)"),
+            Log.info("Caso SAP aberto", sCorrelationId + " / " + (sCaseNumber || "(numero pendente)")
+                + (bVinculoFalhou ? " / NAO vinculado ao chamado" : ""),
                 "megawork.mwmonitorchamados.controller.Main");
 
             // Sem await: a falha da carga ja tem tratamento proprio e nao pode segurar a mensagem.

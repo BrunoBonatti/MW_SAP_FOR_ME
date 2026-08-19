@@ -1,6 +1,6 @@
 _schema-version: 3.3.0
 ID: mw-help-desk
-version: 1.0.10
+version: 1.0.11
 description: "Help Desk - CAP + SAPUI5, publicado no SAP Build Work Zone."
 parameters:
   enable-parallel-deployments: true

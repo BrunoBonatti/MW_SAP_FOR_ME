@@ -205,6 +205,65 @@
                     <layoutData>
                         <layout:GridData span="XL3 L3 M12 S12"/>
                     </layoutData>
+                    <!-- Mesma forma do cartao "Acoes rapidas" do detalhe C4C
+                         (DetalheChamado.fragment.xml:196): cabecalho igual e, embaixo, botao de
+                         14rem centralizado. Sao telas irmas com o mesmo cartao, entao a cara tem
+                         que ser a mesma - e o gemeo ja resolve o botao solto no corpo. -->
+                    <!-- O que o encerramento faz e que nao tem desfazer e dito no popup de
+                         confirmacao (controller), onde o usuario ainda pode cancelar. O caminho
+                         real nunca foi exercitado: o tenant ALM e produtivo e o PATCH encerraria
+                         caso de cliente, entao a validacao saiu so no modo simulado. -->
+                    <f:Card
+                        width="100%"
+                        visible="{= !!${casoSap>/caso} }"
+                        class="sapUiSmallMarginBottom">
+                        <f:content>
+                            <VBox width="100%">
+                                <HBox
+                                    width="100%"
+                                    alignItems="Center"
+                                    class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop sapUiTinyMarginBottom">
+                                    <core:Icon
+                                        src="sap-icon://action-settings"
+                                        size="1.5rem"
+                                        class="sapUiSmallMarginEnd"/>
+                                    <Title
+                                        text="{i18n>detalheSapAcoesRapidas}"
+                                        titleStyle="H5"/>
+                                </HBox>
+                                <VBox
+                                    width="100%"
+                                    alignItems="Center"
+                                    class="sapUiTinyMarginTop sapUiTinyMarginBottom">
+                                    <!-- enabled e nao visible, como o "Finalizar chamado" do gemeo:
+                                         caso encerrado nao aceita o PATCH, e o botao cinza diz o que
+                                         a tela oferece melhor que um lugar vazio.
+                                         A ALM tambem so aceita o Confirmed em Customer Action /
+                                         Partner-Customer Action, mas o status vem como texto livre:
+                                         filtrar por ele desabilitaria o botao no caso errado, entao
+                                         quem explica a recusa e a mensagem do 403. -->
+                                    <!-- 10rem e nao os 14rem do gemeo: la os 14 vinham de tres
+                                         botoes que precisavam da mesma largura, aqui um botao unico
+                                         desse tamanho fica desproporcional na coluna XL3. -->
+                                    <Button
+                                        width="10rem"
+                                        text="{i18n>detalheSapEncerrarCaso}"
+                                        icon="sap-icon://complete"
+                                        type="Accept"
+                                        press=".onDetalheSapEncerrarCaso"
+                                        enabled="{= !${casoSap>/caso/closedAt} }"/>
+                                    <!-- Legenda so no caso encerrado: sem ela o botao cinza nao diz
+                                         por que esta cinza. O gemeo dispensa porque o status dele ja
+                                         aparece na mesma coluna. -->
+                                    <Text
+                                        visible="{= !!${casoSap>/caso/closedAt} }"
+                                        text="{i18n>detalheSapEncerrarCasoJaEncerrado}"
+                                        textAlign="Center"
+                                        class="mwLegenda sapUiTinyMarginTop"/>
+                                </VBox>
+                            </VBox>
+                        </f:content>
+                    </f:Card>
                     <f:Card width="100%" class="sapUiSmallMarginBottom">
                         <f:content>
                             <VBox width="100%">
