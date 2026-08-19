@@ -2,6 +2,7 @@
     xmlns="sap.m"
     xmlns:core="sap.ui.core"
     xmlns:form="sap.ui.layout.form"
+    xmlns:layout="sap.ui.layout"
     xmlns:u="sap.ui.unified"
     xmlns:f="sap.f"
     xmlns:card="sap.f.cards"
@@ -119,16 +120,26 @@
             title="{i18n>criarChamadoWizStep1}"
             icon="sap-icon://request"
             validated="false">
-            <VBox width="100%" class="mwCriarChamadoConteudo">
+            <layout:Grid
+                containerQuery="true"
+                hSpacing="1"
+                vSpacing="1"
+                width="100%"
+                class="mwCriarChamadoConteudo">
 
-                <!-- Tres cartoes (mesmo controle f:Card do cockpit) com o mesmo tratamento visual
-                     para o passo nao parecer um formulario que emenda controles soltos sem relacao
-                     entre si. -->
+            <!-- Dois cartoes lado a lado: Assunto (Classificacao + Descricao) mais largo a
+                 esquerda, Anexo mais estreito a direita. Em M/S os spans caem para 12 e voltam
+                 a empilhar. -->
+            <VBox width="100%">
+                <layoutData>
+                    <layout:GridData span="XL8 L8 M12 S12" />
+                </layoutData>
                 <f:Card width="100%">
                     <f:header>
                         <card:Header title="{i18n>criarChamadoSecaoClassificacao}" iconSrc="sap-icon://request" />
                     </f:header>
                     <f:content>
+                        <VBox width="100%">
                         <form:SimpleForm
                             editable="true"
                             layout="ResponsiveGridLayout"
@@ -236,15 +247,21 @@
                                 state="None" />
 
                         </form:SimpleForm>
-                    </f:content>
-                </f:Card>
 
-                <f:Card width="100%" class="sapUiMediumMarginTop">
-                    <f:header>
-                        <card:Header title="{i18n>criarChamadoDescricao}" iconSrc="sap-icon://edit" />
-                    </f:header>
-                    <f:content>
-                        <VBox width="100%" class="sapUiSmallMargin">
+                        <!-- Descricao dentro do mesmo cartao do Assunto/Classificacao, na parte
+                             de baixo, em vez de um cartao proprio empilhado abaixo. Rotulo "eyebrow"
+                             (pequeno, maiusculo, espacado, cor de destaque) com regua embutida -
+                             visualmente bem diferente dos rotulos de campo acima ("Titulo:", "Empresa:"),
+                             entao nao compete com o cabecalho do cartao nem parece "mais um campo". -->
+                        <VBox  class="sapUiSmallMargin" >
+                            <!-- Text, nao Label: o Label do tema Horizon tem padding interno proprio
+                                 que desalinhava o rotulo em relacao a borda esquerda do TextArea. O
+                                 asterisco obrigatorio e manual aqui (Label.required faz isso sozinho,
+                                 Text nao). -->
+                            <HBox alignItems="Baseline" class="mwCriarChamadoEyebrowLinha">
+                                <Text text="{i18n>criarChamadoDescricao}" class="mwCriarChamadoEyebrow" />
+                                <Text text="*" class="mwCriarChamadoObrigatorio" />
+                            </HBox>
                             <TextArea
                                 id="textAreaDescricaoChamado"
                                 value="{novoChamado>/descricao}"
@@ -273,10 +290,16 @@
                                 state="{path: 'novoChamado>/descricao', formatter: 'fmt.dicaDescricaoState'}"
                                 icon="{path: 'novoChamado>/descricao', formatter: 'fmt.dicaDescricaoIcone'}" />
                         </VBox>
+                        </VBox>
                     </f:content>
                 </f:Card>
+            </VBox>
 
-                <f:Card width="100%" class="sapUiMediumMarginTop mwCartaoLista">
+            <VBox width="100%">
+                <layoutData>
+                    <layout:GridData span="XL4 L4 M12 S12" />
+                </layoutData>
+                <f:Card width="100%" class="mwCartaoLista">
                     <f:header>
                         <card:Header title="{i18n>criarChamadoAnexo}" iconSrc="sap-icon://attachment" />
                     </f:header>
@@ -353,8 +376,9 @@
                         </VBox>
                     </f:content>
                 </f:Card>
-
             </VBox>
+
+            </layout:Grid>
         </WizardStep>
 
         <WizardStep
