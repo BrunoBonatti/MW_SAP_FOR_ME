@@ -3,6 +3,7 @@
     xmlns:core="sap.ui.core"
     xmlns:f="sap.f"
     xmlns:layout="sap.ui.layout"
+    xmlns:u="sap.ui.unified"
     core:require="{formatter: 'megawork/mwmonitorchamados/model/formatter'}">
     <!-- So o modelo casoSap: sem bindElement em tickets, handler do detalhe C4C aqui quebraria. -->
     <f:DynamicPage
@@ -261,6 +262,113 @@
                                         width="100%"
                                         htmlText="{casoSap>/caso/businessImpact}"
                                         class="mwTextoCorrido"/>
+                                </VBox>
+                            </VBox>
+                        </f:content>
+                    </f:Card>
+                    <!-- Ultimo cartao da coluna esquerda, embaixo de Descricao (o de Impacto
+                         fica escondido quando o caso nao tem businessImpact, entao no caso comum
+                         Anexos encosta direto na Descricao). Sem layoutData proprio: GridData em
+                         cartao dentro de VBox e ignorado e ainda confunde o proximo leitor. -->
+                    <f:Card width="100%" class="sapUiSmallMarginBottom">
+                        <f:content>
+                            <VBox width="100%">
+                                <!-- SEM width="100%" neste HBox: com ele o "+" do uploader e
+                                     cortado pelo overflow hidden do .sapFCardContent. -->
+                                <HBox
+                                    justifyContent="SpaceBetween"
+                                    alignItems="Center"
+                                    class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop sapUiTinyMarginBottom">
+                                    <HBox alignItems="Center">
+                                        <core:Icon
+                                            src="sap-icon://attachment"
+                                            size="1.5rem"
+                                            class="sapUiSmallMarginEnd"/>
+                                        <Title
+                                            text="{i18n>detalheCasoSapAnexos}"
+                                            titleStyle="H5"/>
+                                    </HBox>
+                                    <!-- multiple + sameFilenameAllowed: sem o segundo, o
+                                         FileUploader ignora a reselecao do mesmo arquivo depois
+                                         de um setValue(""). Extensao e tamanho ficam fora do
+                                         controle (sem fileType/maximumFileSize) e vao no
+                                         controller, arquivo por arquivo: o controle reprova a
+                                         selecao inteira no primeiro ofensor e engole o change. -->
+                                    <u:FileUploader
+                                        id="fileUploaderAnexoCasoSap"
+                                        name="anexoCasoSap"
+                                        class="mwUploaderBotao"
+                                        buttonOnly="true"
+                                        icon="sap-icon://add"
+                                        iconOnly="true"
+                                        tooltip="{i18n>detalheCasoSapAnexoAdicionar}"
+                                        multiple="true"
+                                        sameFilenameAllowed="true"
+                                        enabled="{= ${casoSap>/anexosEnviando} !== true &amp;&amp; !!${casoSap>/correlationId} }"
+                                        change=".onDetalheCasoSapAnexoAdicionar">
+                                        <u:layoutData>
+                                            <FlexItemData shrinkFactor="0"/>
+                                        </u:layoutData>
+                                    </u:FileUploader>
+                                </HBox>
+                                <!-- SEM width="100%": mesmo estouro do cartao de Descricao. -->
+                                <VBox class="sapUiSmallMarginBegin sapUiSmallMarginEnd sapUiTinyMarginTop sapUiSmallMarginBottom">
+                                    <!-- Erro no cartao e nao por toast: a leitura do caso costuma
+                                         falhar junto e dois avisos iguais se empilhariam. -->
+                                    <MessageStrip
+                                        visible="{casoSap>/anexosFalha}"
+                                        type="Error"
+                                        showIcon="true"
+                                        text="{i18n>detalheCasoSapAnexosErroCarregar}"
+                                        class="sapUiTinyMarginBottom"/>
+                                    <List
+                                        items="{casoSap>/anexos}"
+                                        busy="{= ${casoSap>/anexosCarregando} === true }"
+                                        busyIndicatorDelay="0"
+                                        showSeparators="Inner">
+                                        <noData>
+                                            <IllustratedMessage
+                                                illustrationType="sapIllus-NoData"
+                                                illustrationSize="ExtraSmall"
+                                                enableDefaultTitleAndDescription="false"
+                                                title="{i18n>detalheCasoSapAnexosVazio}"/>
+                                        </noData>
+                                        <CustomListItem
+                                            type="Active"
+                                            press=".onDetalheCasoSapAnexoPress"
+                                            busy="{= ${casoSap>baixando} === true || ${casoSap>enviando} === true }"
+                                            busyIndicatorDelay="0">
+                                            <HBox
+                                                width="100%"
+                                                alignItems="Center"
+                                                justifyContent="SpaceBetween"
+                                                class="sapUiSmallMargin">
+                                                <HBox alignItems="Center">
+                                                    <Avatar
+                                                        displayShape="Square"
+                                                        displaySize="S"
+                                                        src="{path: 'casoSap>nome', formatter: 'formatter.anexoIcone'}"/>
+                                                    <VBox class="sapUiSmallMarginBegin">
+                                                        <Title titleStyle="H6" text="{casoSap>nome}"/>
+                                                        <Text
+                                                            text="{
+                                                                parts: [
+                                                                    {path: 'casoSap>tamanho'},
+                                                                    {path: 'casoSap>quando'},
+                                                                    {path: 'casoSap>autor'}
+                                                                ],
+                                                                formatter: 'formatter.anexoLegenda'
+                                                            }"
+                                                            class="mwLegenda"/>
+                                                    </VBox>
+                                                </HBox>
+                                                <core:Icon
+                                                    src="sap-icon://download"
+                                                    decorative="false"
+                                                    tooltip="{casoSap>nome}"/>
+                                            </HBox>
+                                        </CustomListItem>
+                                    </List>
                                 </VBox>
                             </VBox>
                         </f:content>

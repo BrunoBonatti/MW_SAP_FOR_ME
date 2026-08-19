@@ -2,6 +2,7 @@
     xmlns="sap.m"
     xmlns:core="sap.ui.core"
     xmlns:form="sap.ui.layout.form"
+    xmlns:u="sap.ui.unified"
     core:require="{
         fmt: 'megawork/mwmonitorchamados/model/formatter'
     }">
@@ -380,6 +381,72 @@
                     valueLiveUpdate="true"
                     width="100%" />
 
+                <Label
+                    text="{i18n>abrirChamadoSapAnexos}"
+                    labelFor="fileUploaderAnexoChamadoSap" />
+                <!-- Sem fileType/maximumFileSize, pelo mesmo motivo do wizard: o _areFilesAllowed do
+                     controle reprova a SELECAO INTEIRA no primeiro ofensor e engole o change, entao
+                     um .7z junto de dois prints levaria os prints embora, calado. A peneira (lista da
+                     SAP e 10 MB) mora em _filtrarAnexosPermitidos. -->
+                <VBox width="100%">
+                    <HBox width="100%" justifyContent="End" class="sapUiTinyMarginBottom">
+                        <u:FileUploader
+                            id="fileUploaderAnexoChamadoSap"
+                            name="anexoChamadoSap"
+                            buttonOnly="true"
+                            iconFirst="true"
+                            icon="sap-icon://add"
+                            buttonText="{i18n>abrirChamadoSapAnexoAdicionar}"
+                            tooltip="{i18n>abrirChamadoSapAnexoAdicionar}"
+                            multiple="true"
+                            sameFilenameAllowed="true"
+                            enabled="{= !${chamadoSap>/enviando} }"
+                            change=".onAnexoChamadoSapChange">
+                            <u:layoutData>
+                                <FlexItemData shrinkFactor="0" />
+                            </u:layoutData>
+                        </u:FileUploader>
+                    </HBox>
+                    <!-- Dica no lugar de IllustratedMessage: o dialogo tem 40rem e o spot empurraria
+                         os botoes do rodape para fora da tela. -->
+                    <Text
+                        text="{i18n>abrirChamadoSapAnexoVazio}"
+                        visible="{= ${chamadoSap>/anexos}.length === 0 }"
+                        class="mwLegenda" />
+                    <List
+                        items="{chamadoSap>/anexos}"
+                        showSeparators="Inner"
+                        visible="{= ${chamadoSap>/anexos}.length &gt; 0 }">
+                        <CustomListItem>
+                            <HBox
+                                width="100%"
+                                alignItems="Center"
+                                justifyContent="SpaceBetween"
+                                class="sapUiSmallMargin">
+                                <HBox alignItems="Center">
+                                    <Avatar
+                                        displayShape="Square"
+                                        displaySize="S"
+                                        src="{path: 'chamadoSap>nome', formatter: 'fmt.anexoIcone'}" />
+                                    <VBox class="sapUiSmallMarginBegin">
+                                        <Title titleStyle="H6" text="{chamadoSap>nome}" />
+                                        <Text text="{chamadoSap>tamanho}" class="mwLegenda" />
+                                    </VBox>
+                                </HBox>
+                                <Button
+                                    icon="sap-icon://decline"
+                                    type="Transparent"
+                                    tooltip="{i18n>criarChamadoAnexoRemover}"
+                                    class="sapUiSmallMargin"
+                                    press=".onRemoverAnexoChamadoSap">
+                                    <layoutData>
+                                        <FlexItemData shrinkFactor="0" />
+                                    </layoutData>
+                                </Button>
+                            </HBox>
+                        </CustomListItem>
+                    </List>
+                </VBox>
             </form:SimpleForm>
         </content>
         <beginButton>

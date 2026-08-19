@@ -134,6 +134,23 @@ sap.ui.define([
         "xlsx", "csv", "txt", "log", "zip", "rar", "7z"];
     const MAX_BYTES_ANEXO = 10 * 1024 * 1024;
 
+    // Lista INTEIRA do BinaryAttachment (CALM_ITSM.json), espelhada em EXTENSOES_ANEXO_CASO_SAP do
+    // backend: extensao fora dela a ALM aceita com 200 e descarta o arquivo em silencio, entao a
+    // peneira do front e a unica defesa visivel. Recusar o que a SAP ACEITA e igualmente ruim - dump,
+    // sar, har, eml, evtx e trace sao justamente o que o suporte pede -, por isso a lista e completa
+    // e o unico ausente e o 7z, que a SAP mesma nao aceita.
+    const EXTENSOES_ANEXO_SAP = ["016", "abp", "addons", "aml", "asc", "atl", "avi", "biar", "bmp",
+        "bpmn", "bz2", "cab", "callstack", "car", "cif", "csv", "dkp", "dmp", "doc", "docm", "docx",
+        "dwi", "elg", "eml", "err", "error", "errorinfo", "evtx", "gif", "glf", "gz", "gzip", "har",
+        "htm", "html", "hwl", "inf", "ini", "iqmsq", "jar", "jpeg", "jpg", "json", "lcmbiar", "log",
+        "mdb", "mdl", "mmap", "monitor", "mov", "mp4", "msg", "odp", "ods", "odt", "out", "par",
+        "pcapng", "pcx", "pdf", "pl", "pml", "png", "pps", "ppsx", "ppt", "pptx", "properties",
+        "prt", "rar", "rep", "rh", "rpm", "rpt", "rtf", "sar", "sav", "saz", "sca", "sck", "scm",
+        "sgx", "sh", "sim", "snp", "sqf", "sqlite", "tar", "tgz", "tif", "trace", "trc", "tsk",
+        "txt", "tz", "udc", "udt", "unv", "url", "vds", "ver", "war", "wav", "wid", "wmv", "wri",
+        "xlb", "xlc", "xlf", "xls", "xlsm", "xlsx", "xlt", "xml", "xsl", "z", "z01", "z02", "z03",
+        "z04", "z05", "zip"];
+
     // TypeCodeText no tenant: 10004=Case Description, 10007=Reply to Customer, 10008=Reply from
     // Customer. 10011 (Internal Comment) e 10022 (Service Response Reports) ficam fora: sao internos.
     const TYPE_CODE_RESPOSTA_ATENDIMENTO_C4C = "10007";
@@ -220,7 +237,11 @@ sap.ui.define([
         + "ServiceRequestUserLifeCycleStatusCode,ServiceRequestUserLifeCycleStatusCodeText,"
         + "ServiceRequestLifeCycleStatusCode,ServiceRequestLifeCycleStatusCodeText,"
         + "ProcessorPartyName,BuyerPartyID,BuyerPartyName,BuyerMainContactPartyName,RequestFinisheddatetimeContent,"
-        + "CreationDateTime,ResolvedOnDateTime,BuyerMainContactPartyID,Z_COMPONENT_SFM_KUT";
+        + "CreationDateTime,ResolvedOnDateTime,BuyerMainContactPartyID,Z_COMPONENT_SFM_KUT,"
+        // z_ MINUSCULO nos dois, e nao Z_ como no Z_COMPONENT_SFM_KUT: e assim que o tenant os
+        // batizou (conferido no $metadata) e $select e tudo-ou-nada - com o nome errado o C4C
+        // recusa a REQUISICAO INTEIRA e a tabela de chamados aparece vazia, nao com a coluna em branco.
+        + "z_case_number_KUT,z_id_sfm_KUT";
 
     const oCockpitDateTimeFormat = new Intl.DateTimeFormat("pt-BR", { dateStyle: "short", timeStyle: "short" });
 
@@ -277,9 +298,14 @@ sap.ui.define([
                 // Modulo "Chat com SAP": estado proprio com sufixo Sap porque os handlers sao os
                 // mesmos das duas telas - com as mesmas propriedades, selecionar uma conversa numa
                 // trocaria a conversa aberta na outra. Ao contrario de /chatLista, esta lista NAO e
-                // mock: nasce vazia e e preenchida por _espelharCasosSapNoChat quando a carga dos
-                // casos SAP termina.
+                // mock: nasce vazia e e preenchida por _montarChatListaSap, que escolhe a fonte
+                // pelo perfil - os casos da ALM quando a carga deles termina (BASIS) ou os chamados
+                // do C4C quando /Tickets recarrega (funcional e requisitante).
                 chatListaSap: [],
+                // Busy da COLUNA da esquerda do "Chat com SAP" (so a lista derivada dos chamados a
+                // usa): a lista so e publicada com numero/assunto/data ja lidos na ALM. Nasce false
+                // porque a List binda nela desde o primeiro render.
+                chatListaSapCarregando: false,
                 chatSelecionadoSap: null,
                 chatMensagensSap: [],
                 chatCarregandoSap: false,
@@ -288,25 +314,22 @@ sap.ui.define([
                 // FeedInput binda nela desde o primeiro render.
                 chatEnviandoSap: false,
                 // Preenchidas em _carregarRequisitante a partir de _sRequisitanteOrigem e do campo
-                // basis da function Requisitante. Sao TRES porque os perfis nao sao complementares:
-                // o funcionario FORA de BASIS nao cria chamado (como todo funcionario), nao gerencia
-                // chamado SAP (ao contrario do BASIS) mas CONVERSA com o SAP (ao contrario do
-                // contato) - nenhuma flag unica, nem negada, descreve os tres.
+                // basis da function Requisitante. Sao DUAS porque os perfis nao sao complementares:
+                // o funcionario FORA de BASIS nao cria chamado (como todo funcionario) e tambem nao
+                // gerencia chamado SAP (ao contrario do BASIS) - nenhuma flag unica, nem negada,
+                // descreve os tres.
+                // O "Chat com SAP" continua aberto para os TRES perfis, mas a flag entra la tambem:
+                // ela habilita o FeedInput (so o BASIS escreve no caso) e e o mesmo teste que
+                // _ehFuncionarioBasis faz no JS.
                 // requisitanteEhFuncionarioBasis: coluna/celula Prioridade do Acompanhar Chamados,
                 // o item "Acompanhar chamados SAP" do menu (por enabled: cinza para quem nao e
                 // BASIS) e o botao "Abrir chamado SAP" do detalhe (por visible: este some, e o
                 // unico controle da regra que nao fica cinza).
-                // requisitanteEhFuncionario: o item "Chat com SAP" do menu. Fica no funcionario e
-                // nao no BASIS de proposito (decisao do usuario): o funcional acompanha a conversa
-                // com o SAP sem gerenciar a lista de casos nem abrir chamado novo. E a mesma
-                // condicao da carga dos casos SAP - sem ela a tela abriria vazia para sempre, ver
-                // _carregarChamadosSap.
                 // requisitantePodeCriarChamado: apenas a aba Criar chamado do menu lateral - so
                 // contato tem empresa vinculada, e sem ela o wizard sai sem BuyerPartyID.
                 // Nascem false (mesma logica de podeVoltar/podeAvancar) para o menu nao piscar
                 // habilitado enquanto a function Requisitante ainda esta viajando.
                 requisitanteEhFuncionarioBasis: false,
-                requisitanteEhFuncionario: false,
                 requisitantePodeCriarChamado: false,
                 // PROVISORIO: e-mail do botao de homologacao ligado (o primeiro nasce pressed)
                 emailDev: EMAIL_LOCAL_DEV,
@@ -821,6 +844,11 @@ sap.ui.define([
 
             const oModelo = this._modeloCasoSap();
 
+            // Lido ANTES de trocar /correlationId: e a unica forma de saber se o caso que abre agora
+            // e o mesmo que ainda esta subindo anexo (ver o reset de /anexos abaixo).
+            const bMesmoCasoEnviandoAnexo = oModelo.getProperty("/anexosEnviando") === true
+                && String(oModelo.getProperty("/correlationId") ?? "") === sCorrelationId;
+
             // O correlationId corrente e a chave da guarda de obsolescencia de _lerDetalheCasoSap.
             oModelo.setProperty("/correlationId", sCorrelationId);
             oModelo.setProperty("/caso", null);
@@ -837,6 +865,18 @@ sap.ui.define([
             // de um caso que ja nao e o corrente. Sem este reset, sair do caso com o POST em voo
             // deixaria o campo de mensagem desabilitado em todo caso aberto depois.
             oModelo.setProperty("/chatEnviando", false);
+
+            // Mesmo motivo do reset da conversa: o modelo e memoizado e as linhas/travas do caso
+            // anterior apareceriam no cartao de anexos do caso que abre agora. A EXCECAO e reabrir o
+            // MESMO caso com upload em voo: zerar aqui apagaria a linha otimista e reabilitaria o
+            // "+", e o usuario reenviaria o arquivo que ainda sobe - o POST de anexo nao tem chave de
+            // deduplicacao e o caso ficaria com o anexo em dobro, sem DELETE na API para desfazer.
+            oModelo.setProperty("/anexos", bMesmoCasoEnviandoAnexo
+                ? (oModelo.getProperty("/anexos") ?? []).filter((oLinha) => oLinha.enviando === true)
+                : []);
+            oModelo.setProperty("/anexosFalha", false);
+            oModelo.setProperty("/anexosCarregando", false);
+            oModelo.setProperty("/anexosEnviando", bMesmoCasoEnviandoAnexo);
 
             // Toggle de e-mail dev pode trocar o requisitante enquanto o S-User viaja.
             const iGeracao = this._iGeracaoRequisitante;
@@ -878,6 +918,10 @@ sap.ui.define([
                 // Chamada propria, e nao dentro da leitura dos campos: sao duas functions OData
                 // distintas (1 GET cada) e os campos nao podem esperar 200 comentarios.
                 this._carregarComentariosDoDetalheSap(sCorrelationId, sSUser);
+
+                // Terceira chamada propria: sao tres functions OData distintas (1 GET cada) e os
+                // campos nao podem esperar a lista de anexos.
+                this._carregarAnexosDoCasoSap(sCorrelationId, sSUser);
             });
         },
 
@@ -898,7 +942,13 @@ sap.ui.define([
                     chatFalha: false,
                     // Trava de envio: sem chave de deduplicacao na ALM, dois posts em sequencia
                     // gravariam a mesma mensagem duas vezes no caso real.
-                    chatEnviando: false
+                    chatEnviando: false,
+                    anexos: [],
+                    anexosCarregando: false,
+                    anexosFalha: false,
+                    // Trava de envio por caso: o modelo e memoizado e o finally nao solta a trava de
+                    // um caso que ja nao e o corrente.
+                    anexosEnviando: false
                 });
                 this.getView().setModel(oModelo, "casoSap");
             }
@@ -992,7 +1042,8 @@ sap.ui.define([
                     // uma falha da conversa mentiria sobre o refresh do chamado.
                     return Promise.all([
                         this._lerDetalheCasoSap(sCorrelationId, sSUser),
-                        this._carregarComentariosDoDetalheSap(sCorrelationId, sSUser)
+                        this._carregarComentariosDoDetalheSap(sCorrelationId, sSUser),
+                        this._carregarAnexosDoCasoSap(sCorrelationId, sSUser)
                     ]).then(([bCampos]) => bCampos);
                 })
                 .then((bOk) => {
@@ -1159,6 +1210,10 @@ sap.ui.define([
             const oTicketsModel = oComponent.getModel("tickets");
             // So a do C4C: a tabela SAP vem de /TicketsSap via _carregarChamadosSap.
             const aTabelas = [this.byId("ticketsTable")].filter(Boolean);
+            // Perfil da carga: o toggle PROVISORIO de e-mail dev repoe _bRequisitanteBasis para
+            // false no inicio de _carregarRequisitante, entao uma carga que chegar dentro dessa
+            // janela decidiria a fonte da lista do "Chat com SAP" com o perfil de OUTRO usuario.
+            const iGeracaoRequisitante = this._iGeracaoRequisitante;
 
             aTabelas.forEach((oTable) => {
                 oTable.setBusyIndicatorDelay(0);
@@ -1207,6 +1262,19 @@ sap.ui.define([
                 // _verificarNotificacoesChats busca em lote quem tem mensagem nova e remonta de
                 // novo quando a resposta chegar.
                 this._montarChatLista();
+                // A lista do "Chat com SAP" dos perfis sem S-User deriva DESTES chamados, entao
+                // toda recarga de /Tickets tem de remonta-la. Aqui e nao dentro de _montarChatLista:
+                // aquele roda tambem no poll de 15 s (_verificarNotificacoesChats) e a remontagem
+                // fecharia a conversa aberta e jogaria fora o cache por linha a cada ciclo.
+                // O BASIS fica FORA de proposito (a fonte dele, /TicketsSap, nao mudou aqui): passar
+                // pelo despachante espelharia os casos da ALM a cada recarga do C4C, fechando a
+                // conversa SAP aberta e jogando fora o cache por linha dele. O espelho do BASIS
+                // continua sendo remontado so por _lerCasosSapDosChamados/_limparCasosSap.
+                if (iGeracaoRequisitante === this._iGeracaoRequisitante
+                    && !this._ehFuncionarioBasis()) {
+                    this._derivarChatListaSapDosChamados();
+                }
+
                 this._verificarNotificacoesChats();
 
                 return true;
@@ -1366,16 +1434,28 @@ sap.ui.define([
             this._marcarChatVisualizado(sId);
         },
 
+        // Predicado unico do perfil que fala com a ALM por S-User. Tres consumidores (guarda da
+        // carga dos casos, despachante da lista do chat e recusa de envio) tem de concordar: com
+        // testes soltos, um deles ficaria fora de sincronia numa mudanca futura. Le as variaveis do
+        // controller e nao o modelo "view" porque _bRequisitanteBasis e reposto para false no inicio
+        // de _carregarRequisitante (menos privilegio) - e essa e a leitura que queremos na janela.
+        _ehFuncionarioBasis() {
+            return this._sRequisitanteOrigem === ORIGEM_REQUISITANTE_FUNCIONARIO
+                && this._bRequisitanteBasis === true;
+        },
+
         // Escopo por S-User, logo roda DEPOIS dele (tickets/cockpit usam contatoId e nao esperam).
         _carregarChamadosSap(bAtualizar) {
             const oTable = this.byId("ticketsTableSap");
 
-            // Fora do executor nao existe S-User: limpar, senao fica a lista do usuario anterior.
-            // A guarda e o FUNCIONARIO, nao o BASIS: o funcional tem o menu "Chat com SAP" liberado
-            // e /chatListaSap e espelho de /TicketsSap (_espelharCasosSapNoChat), entao barrar aqui
-            // deixaria a tela dele vazia para sempre. Quem nao e BASIS so nao chega na TABELA de
-            // casos (menu cinza) nem abre caso novo (botao invisivel).
-            if (this._sRequisitanteOrigem !== ORIGEM_REQUISITANTE_FUNCIONARIO) {
+            // Fora do escopo nao existe S-User: limpar, senao fica a lista do usuario anterior.
+            // A guarda e o BASIS, nao mais o FUNCIONARIO: quem escopa esta carga e o S-User
+            // (reporter da ALM) e so o BASIS tem um confiavel. O funcional e o requisitante
+            // continuam com o menu "Chat com SAP" liberado, mas a lista deles NAO vem daqui - vem
+            // dos chamados do C4C que ja estao em tickets>/Tickets
+            // (_derivarChatListaSapDosChamados). Por isso o _limparCasosSap abaixo nao deixa a
+            // coluna vazia: ele remonta a lista pelo despachante.
+            if (!this._ehFuncionarioBasis()) {
                 this._limparCasosSap();
 
                 return Promise.resolve(false);
@@ -1385,6 +1465,12 @@ sap.ui.define([
             const iGeracao = this._iGeracaoRequisitante;
 
             this._iCargasChamadosSapEmVoo = (this._iCargasChamadosSapEmVoo ?? 0) + 1;
+
+            // Busy da coluna do chat junto com o da tabela: a lista do BASIS so e espelhada no FIM
+            // da carga (_espelharCasosSapNoChat), entao ate la a coluna mostrava o "Nenhum caso SAP
+            // encontrado" em vez de dizer que ainda esta carregando. Mesma propriedade que a lista
+            // derivada usa - as duas fontes enchem a MESMA coluna.
+            this.getView().getModel("view").setProperty("/chatListaSapCarregando", true);
 
             oTable?.setBusyIndicatorDelay(0);
             oTable?.setBusy(true);
@@ -1415,6 +1501,8 @@ sap.ui.define([
                     // Solta o busy so quando nenhuma carga esta em voo: a obsoleta chega antes.
                     if (!this._iCargasChamadosSapEmVoo) {
                         oTable?.setBusy(false);
+                        this.getView().getModel("view")
+                            .setProperty("/chatListaSapCarregando", false);
                     }
                 });
         },
@@ -1431,7 +1519,9 @@ sap.ui.define([
 
             // A lista do chat e espelho de /TicketsSap: sem isso o usuario sem escopo (ou o toggle
             // de e-mail) continuaria com os casos do usuario anterior na coluna da esquerda.
-            this._espelharCasosSapNoChat();
+            // Pelo despachante e nao pelo espelho direto: para funcional/requisitante "zerar os
+            // casos da ALM" NAO e "zerar a lista" - a deles vem dos chamados do C4C.
+            this._montarChatListaSap();
         },
 
         // Falha nao abre MessageBox: a lista do C4C e o resto da tela seguem uteis.
@@ -1467,7 +1557,9 @@ sap.ui.define([
                             correlationId: String(oCaso.correlationId ?? ""),
                             caseNumber: String(oCaso.caseNumber ?? ""),
                             subject: String(oCaso.subject ?? ""),
-                            customerNumber: String(oCaso.customerNumber ?? "")
+                            customerNumber: String(oCaso.customerNumber ?? ""),
+                            // So a lista do chat usa: a tabela SAP nao tem coluna de data.
+                            updatedAt: String(oCaso.updatedAt ?? "")
                         })));
 
                     // Truncado/falha na tela: lista parcial calada afirmaria que nao ha mais caso.
@@ -1496,6 +1588,27 @@ sap.ui.define([
                 });
         },
 
+        // Despachante da coluna da esquerda do "Chat com SAP": DUAS fontes para a MESMA lista.
+        //  - BASIS: espelho de tickets>/TicketsSap, os casos lidos na ALM por S-User (codigo atual,
+        //    intocado);
+        //  - funcional e requisitante: derivacao dos CHAMADOS do C4C que ja estao em memoria, porque
+        //    eles nao tem S-User e o escopo da conversa passa a vir do proprio chamado.
+        // Todo produtor que pode mudar a fonte dos DOIS perfis chama SO este metodo (nunca uma das
+        // duas fontes direto): com chamadas espalhadas, a fonte de um perfil apagaria a lista do
+        // outro - foi o que o _limparCasosSap fazia com a lista derivada. A unica excecao e a
+        // recarga de /Tickets, que mexe so na fonte derivada e por isso chama
+        // _derivarChatListaSapDosChamados sob a guarda de perfil: despachar de la remontaria o
+        // espelho do BASIS e fecharia a conversa aberta dele a cada refresh do C4C.
+        _montarChatListaSap() {
+            if (this._ehFuncionarioBasis()) {
+                this._espelharCasosSapNoChat();
+
+                return;
+            }
+
+            this._derivarChatListaSapDosChamados();
+        },
+
         // Espelho, nao binding: a List do chat escreve naoLidas/mensagens POR LINHA e a tabela SAP
         // filtra o mesmo array por correlationId - bindar direto em tickets>/TicketsSap faria uma
         // tela sujar e filtrar a outra. Roda no fim da carga (e do _limparCasosSap) em vez de num
@@ -1519,10 +1632,12 @@ sap.ui.define([
                 // do caso e assunto sem tocar no filtro.
                 departamento: oCaso.subject,
                 ultimaMensagem: oCaso.subject,
-                // O caso nao tem data nem contador de nao lidas: "" faz formatter.dataAbertura
-                // devolver "" e 0 apaga o ObjectStatus pelo visible do markup - e por isso que o
-                // item da lista continua identico ao da tela Chats.
-                dataHora: "",
+                // Ultima alteracao do caso na ALM, convertida pelo MESMO helper das bolhas (a
+                // ALM manda UTC sem Z e _paraIsoLocal sozinho jogaria a linha 3 h no futuro em
+                // UTC-3). Formato inesperado volta "" e formatter.dataAbertura nao mostra nada, que
+                // e como esta linha vivia antes de o campo existir.
+                dataHora: this._dataDaAlmParaIsoLocal(oCaso.updatedAt),
+                // Caso nao tem contador de nao lidas: 0 apaga o ObjectStatus pelo visible do markup.
                 naoLidas: 0,
                 // Cache por linha dos comentarios lidos, no mesmo desenho de chat/chatCarregado do
                 // DetalheChamado: reabrir o caso nao repaga o GET na ALM, e a mensagem digitada no
@@ -1530,6 +1645,193 @@ sap.ui.define([
                 mensagens: [],
                 comentariosCarregados: false
             })));
+
+            this._soltarConversaSapAberta();
+        },
+
+        // Lista do "Chat com SAP" para funcional e requisitante: derivada dos chamados do C4C que
+        // JA estao em memoria (tickets>/Tickets), sem nenhuma chamada extra - entram os que tem os
+        // DOIS campos custom do header, que e o que liga o chamado ao caso da ALM. Espelho e nao
+        // binding, pelo mesmo motivo de _espelharCasosSapNoChat: a List escreve
+        // mensagens/comentariosCarregados POR LINHA e sujaria /Tickets. Roda so nas recargas de
+        // /Tickets (ver _montarChatListaSap): um chamado que ganha ou perde os campos Z durante a
+        // sessao so entra/sai da lista na recarga seguinte, e isso e preferivel a remontar a lista
+        // no poll de 15 s, que fecharia a conversa aberta e apagaria o cache de cada linha.
+        _derivarChatListaSapDosChamados() {
+            // Geracao PROPRIA e nao a de _iGeracaoComentariosCasoSap: aquela muda a cada clique e
+            // mataria o enriquecimento em voo; esta so muda quando a LISTA e remontada, que e
+            // exatamente quando o enriquecimento anterior passa a escrever em linhas que ja sairam.
+            this._iGeracaoChatListaSap = (this._iGeracaoChatListaSap || 0) + 1;
+            const iGeracao = this._iGeracaoChatListaSap;
+            const aChamados = this.getOwnerComponent().getModel("tickets")
+                .getProperty("/Tickets") ?? [];
+            const oModel = this.getView().getModel("view");
+
+            const aLinhas = aChamados
+                .filter((oChamado) => oChamado?.caseNumberSap && oChamado?.idSfm)
+                .map((oChamado) => ({
+                    // id e o ID DO CHAMADO, a unica chave que o backend revalida: ele rele o chamado
+                    // no C4C com o filtro do perfil e tira os campos Z DE LA. Mandar o correlationId
+                    // daqui deixaria qualquer usuario autenticado ler a conversa de um caso de outro
+                    // cliente do tenant. id e chamadoId valem o mesmo de proposito: id e o contrato
+                    // de _pathDoChatPorId e chamadoId e o parametro da function.
+                    id: oChamado.ID,
+                    // Marca a ORIGEM da linha: e a presenca dele que manda
+                    // _carregarComentariosDoCasoSap pela trilha nova.
+                    chamadoId: oChamado.ID,
+                    // SEM correlationId de proposito, e nao por falta de dado: o campo vazio e o que
+                    // impede esta linha de cair na trilha do S-User (_bolhasDoCasoSap) e no POST de
+                    // _enviarComentarioDoChatSap. O correlationId real nunca sobe para a tela.
+                    // Numero do caso na SAP como titulo, igual a linha do BASIS. E FALLBACK: o
+                    // numero que vale e o da ALM, que _enriquecerChatListaSap escreve por cima -
+                    // o mesmo valor que o clique ja gravava em _aplicarHeaderDoCasoSapNaLinha, e e
+                    // por isso que o rotulo da linha deixa de mudar depois do clique.
+                    nome: oChamado.caseNumberSap,
+                    // Titulo do CHAMADO como subtitulo/segunda linha ate o header da ALM chegar (a
+                    // conversa sobrescreve departamento com o subject do caso). _buscarChats filtra
+                    // nome/departamento/ultimaMensagem, entao a busca cobre numero do caso e assunto
+                    // do chamado sem tocar no filtro. Tambem FALLBACK: _enriquecerChatListaSap poe o
+                    // subject do caso nos dois, porque a segunda linha pedida e o assunto NA SAP.
+                    departamento: oChamado.titulo,
+                    ultimaMensagem: oChamado.titulo,
+                    // Aqui existe data (a do chamado), ao contrario da linha do BASIS: e o mesmo
+                    // valor que a tela "Chats" mostra, ja no formato que formatter.dataAbertura le.
+                    // Tambem FALLBACK: a data pedida e a do ULTIMO COMENTARIO na ALM (a de abertura
+                    // do chamado nunca muda), e quem a substitui e _enriquecerChatListaSap.
+                    dataHora: oChamado.dataAbertura,
+                    // Estes perfis nao recebem notificacao de caso SAP: 0 apaga o ObjectStatus pelo
+                    // visible do markup.
+                    naoLidas: 0,
+                    // Cache por linha, mesmo desenho da linha do BASIS: reabrir a conversa nao
+                    // repaga o GET na ALM.
+                    mensagens: [],
+                    comentariosCarregados: false
+                }));
+
+            this._soltarConversaSapAberta();
+
+            // A lista NAO vai para a tela ainda: as linhas acima so tem o dado do CHAMADO, e mostrar
+            // isso primeiro fazia numero, assunto e data se corrigirem sozinhos alguns segundos
+            // depois - e era isso que se via ao abrir a tela. Fica o busy, e a publicacao acontece
+            // em _enriquecerChatListaSap, com o dado da ALM ja aplicado.
+            // Lista vazia nao paga chamada nenhuma: o despachante (_limparCasosSap) chega aqui duas
+            // vezes por carga antes de /Tickets existir e antes do perfil ser resolvido, e o BASIS
+            // pagaria uma delas.
+            oModel.setProperty("/chatListaSap", []);
+
+            if (!aLinhas.length) {
+                oModel.setProperty("/chatListaSapCarregando", false);
+
+                return;
+            }
+
+            oModel.setProperty("/chatListaSapCarregando", true);
+            this._enriquecerChatListaSap(iGeracao, aLinhas);
+        },
+
+        // Numero, assunto e data da ULTIMA MENSAGEM vem da ALM, e nao do chamado: o C4C so sabe o
+        // numero do caso (campo Z) e o titulo/abertura do CHAMADO, entao a lista mostrava os tres do
+        // lado errado. UMA chamada para a lista inteira - o escopo, o teto, o paralelismo e o cache
+        // sao do backend, que rele os chamados do usuario no C4C: nenhum correlationId sobe daqui,
+        // pelo mesmo motivo de _lerConversaCasoSapDoChamado. E quem PUBLICA a lista: recebe as
+        // linhas montadas com o dado do chamado, aplica o que a ALM devolveu e so entao entrega a
+        // coluna, soltando o busy.
+        _enriquecerChatListaSap(iGeracao, aLinhas) {
+            const oModel = this.getView().getModel("view");
+
+            return this._lerUsuarioLogado()
+                .then((sEmail) => this._lerConversasCasoSapDoRequisitante(sEmail))
+                .then((oResultado) => {
+                    // Lista remontada no meio do caminho: estas linhas ja perderam a coluna
+                    // para a remontagem nova, entao aplicar (e publicar, no finally) devolveria a
+                    // tela para o estado velho.
+                    if (iGeracao !== this._iGeracaoChatListaSap) {
+                        return;
+                    }
+
+                    if (oResultado?.truncado === true) {
+                        Log.warning("Chat com SAP: " + oResultado.total
+                            + " chamados com caso na ALM, " + oResultado.exibidos
+                            + " enriquecidos", null,
+                            "megawork.mwmonitorchamados.controller.Main");
+                    }
+
+                    this._aplicarConversasSapNasLinhas(aLinhas, oResultado?.conversas ?? []);
+                })
+                .catch((oError) => {
+                    // warning e nao error: a lista sai com o dado do CHAMADO (numero do campo Z,
+                    // titulo e abertura) em vez de ficar vazia - nada de MessageBox por um
+                    // enriquecimento.
+                    Log.warning("Falha ao enriquecer a lista do Chat com SAP na ALM", oError,
+                        "megawork.mwmonitorchamados.controller.Main");
+                })
+                .finally(() => {
+                    // Publica aqui, e nao no then: o catch tambem tem de entregar a lista, senao a
+                    // coluna fica vazia para sempre quando a ALM cai. Geracao velha nao publica -
+                    // a remontagem seguinte ja e a dona da coluna.
+                    if (iGeracao !== this._iGeracaoChatListaSap) {
+                        return;
+                    }
+
+                    oModel.setProperty("/chatListaSap", aLinhas);
+                    oModel.setProperty("/chatListaSapCarregando", false);
+                });
+        },
+
+        // Mutacao direta dos objetos, e nao setProperty: estas linhas AINDA NAO estao publicadas
+        // em view>/chatListaSap (quem publica e o finally de _enriquecerChatListaSap), entao nao ha
+        // binding para notificar - e e justamente por nao estarem na tela que o usuario nao ve mais
+        // o numero e o assunto se corrigirem sozinhos.
+        _aplicarConversasSapNasLinhas(aLinhas, aConversas) {
+            // Casamento por CHAVE e nao por posicao: o backend responde fora de ordem e pode nem
+            // trazer todos (teto por chamada).
+            const oPorChamado = new Map(aLinhas.map((oLinha) => [String(oLinha.chamadoId), oLinha]));
+
+            aConversas.forEach((oConversa) => {
+                const oLinha = oPorChamado.get(String(oConversa?.chamadoId ?? "").trim());
+
+                if (!oLinha) {
+                    return;
+                }
+
+                const sCaseNumber = String(oConversa.caseNumber ?? "").trim();
+                const sSubject = String(oConversa.subject ?? "").trim();
+                // Mesma conversao das bolhas: a ALM manda UTC sem Z e _paraIsoLocal sozinho jogaria
+                // a linha 3 h no futuro em UTC-3. Formato inesperado volta "" e cai no fallback.
+                const sQuando = this._dataDaAlmParaIsoLocal(oConversa.ultimaMensagemEm);
+
+                // Campo vazio NAO sobrescreve: caso que a ALM nao soube responder (falha: true,
+                // campos vazios) fica com o numero do campo Z, o titulo e a data de abertura do
+                // chamado, em vez de entrar na lista sem rotulo.
+                if (sCaseNumber) {
+                    oLinha.nome = sCaseNumber;
+                }
+
+                if (sSubject) {
+                    // ultimaMensagem e o que a List mostra ABAIXO do numero; departamento e o
+                    // subtitulo do cabecalho da conversa. Os dois recebem o subject para o rotulo
+                    // nao MUDAR quando _aplicarHeaderDoCasoSapNaLinha escrever o mesmo valor depois
+                    // do clique.
+                    oLinha.ultimaMensagem = sSubject;
+                    oLinha.departamento = sSubject;
+                }
+
+                if (sQuando) {
+                    oLinha.dataHora = sQuando;
+                }
+
+                // mensagens, comentariosCarregados, id, chamadoId e naoLidas NAO sao tocados: sao o
+                // cache por linha e a identidade dela.
+            });
+
+            // A lista NAO e reordenada pela data nova: a ordem por chamado (CreationDateTime desc)
+            // e a mesma da aba Chats, e reordenar faria a linha pular embaixo do dedo do usuario.
+        },
+        // Toda remontagem da lista troca os OBJETOS das linhas, e este reset e o preco disso.
+        // Compartilhado pelas duas fontes (espelho do BASIS e derivacao dos chamados) para as duas
+        // nao divergirem.
+        _soltarConversaSapAberta() {
+            const oModel = this.getView().getModel("view");
 
             // A conversa aberta apontava para um item do array ANTIGO: sem soltar a selecao o
             // cabecalho continuaria mostrando um caso que nao esta mais na lista.
@@ -1561,6 +1863,11 @@ sap.ui.define([
                 // Componente ja gravado no header do C4C: o dialogo SAP abre com ele para o
                 // requisitante so trocar quando precisar.
                 componenteSapId: String(oServiceRequest.Z_COMPONENT_SFM_KUT ?? "").trim(),
+                // Campos custom do header que ligam o chamado ao caso da ALM: ficam na linha
+                // (memoria) sem coluna nem campo de detalhe - o consumidor deles e codigo, nao a
+                // tela, e reler o chamado so para pegar a referencia custaria um GET por caso.
+                caseNumberSap: String(oServiceRequest.z_case_number_KUT ?? "").trim(),
+                idSfm: String(oServiceRequest.z_id_sfm_KUT ?? "").trim(),
                 titulo: String(oServiceRequest.Name ?? ""),
                 tipo: this._tipoTexto(oServiceRequest.ProcessingTypeCode, oServiceRequest.ProcessingTypeCodeText),
                 prioridade: oServiceRequest.ServicePriorityCode ?? "",
@@ -3297,7 +3604,10 @@ sap.ui.define([
                 sUserLogadoNome: "",
                 sUserLogadoCarregando: true,
                 sUserLogadoFalha: false,
-                enviando: false
+                enviando: false,
+                // Pendentes do dialogo: vao para a SAP DEPOIS de o caso existir (o POST do anexo
+                // referencia o correlationId), e o setData de cada abertura zera a lista.
+                anexos: []
             });
 
             // Promise cacheado: loadFragment pendura o dialogo nos dependents da view uma vez so.
@@ -3669,6 +3979,8 @@ sap.ui.define([
                 // enquanto o POST corre, e reler o modelo depois acertaria o header errado.
                 const sObjectID = String(oModelo.getProperty("/objectID") ?? "").trim();
                 const sComponenteOriginal = String(oModelo.getProperty("/componenteSapOriginal") ?? "").trim();
+                // Congelado com o resto: o setData da proxima abertura zeraria /anexos no meio do envio.
+                const aAnexos = (oModelo.getProperty("/anexos") ?? []).slice();
 
                 // $direct: escrita lenta na ALM nao pode segurar o $batch do resto do dialogo.
                 oOperation = this.getOwnerComponent().getModel()
@@ -3706,7 +4018,17 @@ sap.ui.define([
                     : await this._propagarComponenteChamadoSap(
                         sObjectID, oCaso.componenteId, sComponenteOriginal);
 
-                this._concluirCasoSapCriado(sCorrelationId, sCaseNumber, sResultadoComponente);
+                // So agora: o POST do anexo referencia o correlationId, logo o caso tem de existir.
+                // Pulado no simulado como o PATCH: anexar num id SIMULADO- seria chamada REAL a ALM.
+                // Com await e nao fire-and-forget: soltar aqui mataria as promises de base64 junto
+                // com o File e destravaria o dialogo com POSTs em voo.
+                const oEnvioAnexos = sCorrelationId.startsWith("SIMULADO-")
+                    ? { iEnviados: 0, aFalharam: [] }
+                    : await this._enviarAnexosAoCasoSap(sCorrelationId, oCaso.sUserRequisitante,
+                        oCaso.installationNumber, aAnexos);
+
+                this._concluirCasoSapCriado(sCorrelationId, sCaseNumber, sResultadoComponente,
+                    aAnexos.length, oEnvioAnexos);
             } catch (oError) {
                 this._falhaAoAbrirCasoSap(oError);
             } finally {
@@ -3742,7 +4064,8 @@ sap.ui.define([
 
         // So depois do caso existir na SAP: em erro o dialogo fica aberto para nao jogar fora o
         // texto digitado, e o caseNumber vazio nao invalida nada - o caso ja foi criado.
-        _concluirCasoSapCriado(sCorrelationId, sCaseNumber, sResultadoComponente) {
+        _concluirCasoSapCriado(sCorrelationId, sCaseNumber, sResultadoComponente, iTotalAnexos,
+            oEnvioAnexos) {
             const oBundle = this._getResourceBundle();
 
             this.byId("dialogAbrirChamadoSap")?.close();
@@ -3750,12 +4073,21 @@ sap.ui.define([
             const sTexto = sCaseNumber
                 ? oBundle.getText("abrirChamadoSapCriado", [sCaseNumber])
                 : oBundle.getText("abrirChamadoSapCriadoSemNumero", [sCorrelationId]);
+            const sAdendoAnexo = this._adendoDeAnexosDoCasoSap(iTotalAnexos ?? 0, oEnvioAnexos);
 
             // Um MessageBox so, e nao toast: dois avisos encadeados soterrariam o numero do caso,
             // que e a unica chave util do registro criado.
-            MessageBox.success(sResultadoComponente === "erro"
+            let sTextoFinal = sResultadoComponente === "erro"
                 ? sTexto + "\n\n" + oBundle.getText("abrirChamadoSapComponenteErro")
-                : sTexto);
+                : sTexto;
+
+            if (sAdendoAnexo) {
+                sTextoFinal += "\n\n" + sAdendoAnexo;
+            }
+
+            // Anexo que nao subiu exige acao (reenviar pelo chat), entao verde mentiria; o numero do
+            // caso continua no texto porque o caso EXISTE. Componente com erro segue no success.
+            MessageBox[sAdendoAnexo ? "warning" : "success"](sTextoFinal);
 
             Log.info("Caso SAP aberto", sCorrelationId + " / " + (sCaseNumber || "(numero pendente)"),
                 "megawork.mwmonitorchamados.controller.Main");
@@ -3823,6 +4155,104 @@ sap.ui.define([
             } finally {
                 oOperation?.destroy();
             }
+        },
+
+        // Acumula os arquivos escolhidos em chamadoSap>/anexos, a UNICA fonte de verdade dos
+        // pendentes do dialogo. A regra e a mesma do wizard, entao mora em _acumularAnexosPendentes;
+        // aqui muda so a lista de extensoes - a ALM aceita o .7z com 200 e joga o arquivo fora calada.
+        onAnexoChamadoSapChange(oEvent) {
+            this._acumularAnexosPendentes(this._modeloChamadoSap(), oEvent, EXTENSOES_ANEXO_SAP,
+                "abrirChamadoSapAnexoTipoInvalido");
+        },
+
+        onRemoverAnexoChamadoSap(oEvent) {
+            this._removerAnexoPendente(this._modeloChamadoSap(), oEvent, "chamadoSap");
+        },
+
+        // Envia os anexos EM SERIE, uma action por arquivo. NUNCA rejeita: o caso ja existe na SAP e
+        // nao ha rollback, entao quem relata o parcial e o chamador, com contagem e nomes.
+        _enviarAnexosAoCasoSap(sCorrelationId, sSUser, sInstallationNumber, aPendentes) {
+            if (!aPendentes?.length) {
+                return Promise.resolve({ iEnviados: 0, aFalharam: [] });
+            }
+
+            // installation vazio volta como 400 generico da SAP: melhor nem chamar e relatar falha.
+            if (!sCorrelationId || !sSUser || !sInstallationNumber) {
+                Log.error("Anexos do caso SAP nao enviados: falta correlationId, S-User ou instalacao",
+                    sCorrelationId + " / " + sSUser + " / " + sInstallationNumber,
+                    "megawork.mwmonitorchamados.controller.Main");
+
+                return Promise.resolve({
+                    iEnviados: 0,
+                    aFalharam: aPendentes.map((oAnexo) => oAnexo.nome)
+                });
+            }
+
+            const oResultado = { iEnviados: 0, aFalharam: [] };
+
+            // Em serie e sem retry: dois base64 de 10 MB no mesmo lote estouram o body_parser, e o
+            // POST do anexo nao tem chave de deduplicacao para um reenvio ser seguro.
+            return aPendentes.reduce((pAnterior, oAnexo) => pAnterior.then(() =>
+                this._enviarAnexoCasoSap(sCorrelationId, sSUser, sInstallationNumber, oAnexo)
+                    .then(() => {
+                        oResultado.iEnviados += 1;
+                    })
+                    .catch((oError) => {
+                        Log.error("Falha ao enviar o anexo " + oAnexo.nome + " ao caso SAP "
+                            + sCorrelationId, oError,
+                            "megawork.mwmonitorchamados.controller.Main");
+                        oResultado.aFalharam.push(oAnexo.nome);
+                    })
+            ), Promise.resolve()).then(() => oResultado);
+        },
+
+        // Unica chamada de EnviarAnexoCasoSap do app: serve o dialogo e o detalhe. UM arquivo por
+        // chamada, porque o backend faz os DOIS POSTs da SAP (upload + vinculo) por arquivo.
+        _enviarAnexoCasoSap(sCorrelationId, sSUser, sInstallationNumber, oPendente) {
+            return Promise.resolve(oPendente.pBase64).then((sBase64) => {
+                // A promise de leitura nunca rejeita: base64 vazio E a sinalizacao de falha.
+                if (!sBase64) {
+                    throw new Error("Anexo " + oPendente.nome + " sem conteudo legivel");
+                }
+
+                // $direct: no $batch default dois arquivos somariam ~27 MB e o 413 viria antes de
+                // qualquer handler.
+                const oOperation = this.getOwnerComponent().getModel()
+                    .bindContext("/EnviarAnexoCasoSap(...)", null, { $$groupId: "$direct" });
+
+                oOperation.setParameter("correlationId", sCorrelationId);
+                oOperation.setParameter("sUser", sSUser);
+                oOperation.setParameter("installationNumber", sInstallationNumber);
+                oOperation.setParameter("nome", oPendente.nome);
+                // Descricao vazia: o backend usa o nome como fallback (a SAP exige os tres campos).
+                oOperation.setParameter("descricao", "");
+                oOperation.setParameter("base64", sBase64);
+
+                return oOperation.invoke()
+                    .then(() => oOperation.getBoundContext().requestObject())
+                    .then(() => true)
+                    .finally(() => oOperation.destroy());
+            });
+        },
+
+        // Adendo do MessageBox de caso criado: "" quando nao ha nada a avisar. O caso NUNCA pode ser
+        // apresentado como falha por causa de anexo, entao isto e adendo e nao mensagem propria.
+        _adendoDeAnexosDoCasoSap(iTotal, oEnvio) {
+            const oBundle = this._getResourceBundle();
+
+            if (!oEnvio?.aFalharam?.length) {
+                return "";
+            }
+
+            if (!oEnvio.iEnviados) {
+                return iTotal === 1
+                    ? oBundle.getText("abrirChamadoSapAnexoAvisoUm")
+                    : oBundle.getText("abrirChamadoSapAnexoAvisoNenhum", [String(iTotal)]);
+            }
+
+            // Nomes junto: generico nao serve, o usuario precisa saber o que reenviar pelo chat.
+            return oBundle.getText("abrirChamadoSapAnexoAvisoParcial",
+                [String(oEnvio.iEnviados), String(iTotal), oEnvio.aFalharam.join(", ")]);
         },
 
         // Sem espelhar, reabrir o dialogo mostraria o componente antigo; o objectID e conferido
@@ -3957,13 +4387,25 @@ sap.ui.define([
         },
 
         // Acumula os arquivos escolhidos em novoChamado>/anexos, a UNICA fonte de verdade dos
-        // pendentes do wizard (nao ha campo do controller guardando arquivo).
+        // pendentes do wizard (nao ha campo do controller guardando arquivo). Sem lista propria: o
+        // wizard usa as extensoes do C4C, que sao o default de _filtrarAnexosPermitidos.
         onAnexoChange(oEvent) {
+            this._acumularAnexosPendentes(this.getView().getModel("novoChamado"), oEvent);
+        },
+
+        onRemoverAnexo(oEvent) {
+            this._removerAnexoPendente(this.getView().getModel("novoChamado"), oEvent,
+                "novoChamado");
+        },
+
+        // Acumulo dos pendentes dos DOIS uploaders de criacao (wizard C4C e dialogo SAP): a regra de
+        // vagas, o shape do pendente (4 campos) e o setValue("") estavam duplicados linha a linha, e
+        // a segunda copia seria esquecida na primeira correcao. Muda o modelo e a lista, nao a regra.
+        _acumularAnexosPendentes(oModelo, oEvent, aExtensoes, sChaveTipoInvalido) {
             const oUploader = oEvent.getSource();
-            const oNovoChamado = this.getView().getModel("novoChamado");
             const aFiles = this._filtrarAnexosPermitidos(
-                Array.from(oEvent.getParameter("files") ?? []));
-            const aAtuais = oNovoChamado.getProperty("/anexos") ?? [];
+                Array.from(oEvent.getParameter("files") ?? []), aExtensoes, sChaveTipoInvalido);
+            const aAtuais = oModelo.getProperty("/anexos") ?? [];
 
             if (aFiles.length) {
                 const iVagas = Math.max(MAX_ANEXOS_PENDENTES - aAtuais.length, 0);
@@ -3976,7 +4418,7 @@ sap.ui.define([
                 // Array novo: mutacao in place nao reavalia o visible do empty state nem o resumo
                 // do passo de revisao. A leitura base64 comeca AQUI porque o objeto File morre
                 // quando o FileUploader e limpo - o que sobrevive ate o envio e a promise.
-                oNovoChamado.setProperty("/anexos", aAtuais.concat(
+                oModelo.setProperty("/anexos", aAtuais.concat(
                     aFiles.slice(0, iVagas).map((oFile) => ({
                         nome: oFile.name,
                         mimeType: oFile.type || MIME_TYPE_PADRAO_ANEXO,
@@ -3989,24 +4431,23 @@ sap.ui.define([
             oUploader.setValue("");
         },
 
-        onRemoverAnexo(oEvent) {
-            const oNovoChamado = this.getView().getModel("novoChamado");
-            const sPathAnexo = oEvent.getSource().getBindingContext("novoChamado")?.getPath();
+        // Remove UM pendente, pelo indice do path ("/anexos/2"): remover a lista inteira descartaria
+        // os arquivos que o usuario quer manter.
+        _removerAnexoPendente(oModelo, oEvent, sNomeModelo) {
+            const sPathAnexo = oEvent.getSource().getBindingContext(sNomeModelo)?.getPath();
 
             if (!sPathAnexo) {
                 return;
             }
 
-            // Um item so, pelo indice do path ("/anexos/2"): remover a lista inteira descartaria os
-            // arquivos que o usuario quer manter.
             const iIndice = Number(sPathAnexo.split("/").pop());
-            const aAnexos = oNovoChamado.getProperty("/anexos") ?? [];
+            const aAnexos = oModelo.getProperty("/anexos") ?? [];
 
             if (!(iIndice >= 0) || iIndice >= aAnexos.length) {
                 return;
             }
 
-            oNovoChamado.setProperty("/anexos",
+            oModelo.setProperty("/anexos",
                 aAnexos.slice(0, iIndice).concat(aAnexos.slice(iIndice + 1)));
 
             MessageToast.show(this._getResourceBundle().getText("criarChamadoAnexoRemovido"));
@@ -4016,7 +4457,11 @@ sap.ui.define([
         // os recusados por motivo. Aceitar arquivo por arquivo e o ponto - com fileType e
         // maximumFileSize no controle, o UI5 reprovava a selecao inteira no primeiro ofensor e ainda
         // engolia o change, entao os arquivos bons escolhidos junto sumiam sem aviso nenhum.
-        _filtrarAnexosPermitidos(aFiles) {
+        _filtrarAnexosPermitidos(aFiles, aExtensoes, sChaveTipoInvalido) {
+            // Lista e mensagem por parametro: o caminho SAP recusa o que a ALM descartaria calado
+            // (sem 7z) e cita as extensoes da SAP, nao as do C4C.
+            const aPermitidas = aExtensoes ?? EXTENSOES_ANEXO;
+            const sChaveTipo = sChaveTipoInvalido || "criarChamadoAnexoTipoInvalido";
             const oBundle = this._getResourceBundle();
             const aTipoInvalido = [];
             const aGrandes = [];
@@ -4026,7 +4471,7 @@ sap.ui.define([
                 const iPonto = sNome.lastIndexOf(".");
                 const sExtensao = iPonto >= 0 ? sNome.slice(iPonto + 1).toLowerCase() : "";
 
-                if (EXTENSOES_ANEXO.indexOf(sExtensao) < 0) {
+                if (aPermitidas.indexOf(sExtensao) < 0) {
                     aTipoInvalido.push(sNome);
                     return false;
                 }
@@ -4042,8 +4487,7 @@ sap.ui.define([
             // Um toast por MOTIVO, com os nomes: um por arquivo enfileiraria varios toasts em cima
             // do usuario numa selecao grande.
             if (aTipoInvalido.length) {
-                MessageToast.show(oBundle.getText("criarChamadoAnexoTipoInvalido",
-                    [aTipoInvalido.join(", ")]));
+                MessageToast.show(oBundle.getText(sChaveTipo, [aTipoInvalido.join(", ")]));
             }
 
             if (aGrandes.length) {
@@ -4505,7 +4949,6 @@ sap.ui.define([
             // privilegio enquanto a function viaja e em caso de falha.
             this._bRequisitanteBasis = false;
             this.getView().getModel("view").setProperty("/requisitanteEhFuncionarioBasis", false);
-            this.getView().getModel("view").setProperty("/requisitanteEhFuncionario", false);
 
             // O e-mail vem do UserInfo do shell; sem shell vai null e o backend resolve pelo JWT
             // (app-service.js) - caminho que o frontend nao consegue adulterar.
@@ -4540,28 +4983,24 @@ sap.ui.define([
                         ? CAMPO_ESCOPO_EXECUTOR
                         : CAMPO_ESCOPO_REQUISITANTE;
 
-                // Os dois testes ficam aqui e nao no XML porque o markup nao conhece o valor de
+                // Os testes ficam aqui e nao no XML porque o markup nao conhece o valor de
                 // ORIGEM_REQUISITANTE_FUNCIONARIO: a view so recebe o booleano ja resolvido.
-                const bFuncionarioBasis =
-                    this._sRequisitanteOrigem === ORIGEM_REQUISITANTE_FUNCIONARIO
-                    && this._bRequisitanteBasis;
-
                 const bFuncionario =
                     this._sRequisitanteOrigem === ORIGEM_REQUISITANTE_FUNCIONARIO;
+                const bFuncionarioBasis = bFuncionario && this._bRequisitanteBasis;
 
                 this.getView().getModel("view")
                     .setProperty("/requisitanteEhFuncionarioBasis", bFuncionarioBasis);
-                this.getView().getModel("view")
-                    .setProperty("/requisitanteEhFuncionario", bFuncionario);
                 this.getView().getModel("view").setProperty("/requisitantePodeCriarChamado",
                     this._sRequisitanteOrigem === ORIGEM_REQUISITANTE_CONTATO);
 
-                // Prefetch no FUNCIONARIO e nao so no BASIS: o S-User escopa a carga dos casos SAP,
-                // que agora roda tambem para o funcional (o Chat com SAP dele depende dela).
-                // Adianta a consulta cara aqui para o dialogo so exibir; sem await - a promise
-                // cacheada nunca rejeita. Sem o prefetch a carga ainda funciona
-                // (_lerSUserRequisitante consulta na hora), mas em serie.
-                if (bFuncionario) {
+                // Prefetch so no BASIS: depois que a carga dos casos SAP passou a exigir BASIS
+                // (_carregarChamadosSap) e a conversa do funcional/requisitante passou a ir por
+                // ConversaCasoSapDoChamado (sem S-User), nenhum consumidor de _lerSUserRequisitante
+                // e alcancavel fora do BASIS - manter o prefetch no funcionario pagaria um
+                // ContatoSap por login e por toggle sem leitor. Sem await: a promise cacheada nunca
+                // rejeita, e sem o prefetch a carga ainda funciona, so em serie.
+                if (bFuncionarioBasis) {
                     this._prefetchSUserRequisitante(sEmailRequisitante, iGeracao);
                 }
 
@@ -4944,9 +5383,11 @@ sap.ui.define([
         // "Chats" (sufixo ""): chatLista vem dos chamados do requisitante (_montarChatLista) e
         // abrir um chat reusa o MESMO _carregarChatDoTicket que o card de chat do Detalhe usa -
         // ver _selecionarChatReal/_enviarMensagemChatReal.
-        // "Chat com SAP" (sufixo "Sap"): chatListaSap e espelhada dos casos SAP por
-        // _espelharCasosSapNoChat e a conversa vem da ALM - ver _carregarComentariosDoCasoSap/
-        // _enviarComentarioDoChatSap.
+        // "Chat com SAP" (sufixo "Sap"): chatListaSap tem DUAS fontes conforme o perfil, e quem
+        // escolhe e _montarChatListaSap - espelho dos casos da ALM por S-User para o BASIS
+        // (_espelharCasosSapNoChat) e derivacao dos chamados do C4C para funcional/requisitante
+        // (_derivarChatListaSapDosChamados). A conversa vem da ALM nas duas, por functions
+        // diferentes - ver _carregarComentariosDoCasoSap/_enviarComentarioDoChatSap.
         // As duas telas compartilham handler; o sufixo entra tanto nos ids dos controles quanto no
         // nome das propriedades do modelo "view", entao cada uma tem lista, conversa selecionada e
         // mensagens proprias. onChatAcoes e onChatInformacoes ficam sem variante *Sap de proposito:
@@ -5002,6 +5443,7 @@ sap.ui.define([
             const oChat = oModel.getProperty(sPathChat) ?? {};
             const sId = String(oChat.id ?? "");
             const sCorrelationId = String(oChat.correlationId ?? "").trim();
+            const sChamadoId = String(oChat.chamadoId ?? "").trim();
 
             // Contador de geracao, nao comparacao de path: trocar de caso rapido deixaria a resposta
             // do caso anterior pintar a conversa do novo (mesmo motivo de _iGeracaoCasosChamadoSap).
@@ -5025,6 +5467,17 @@ sap.ui.define([
 
             // Limpa antes de carregar: senao as bolhas do caso anterior ficam sob o busy.
             oModel.setProperty("/chatMensagensSap", []);
+
+            // Duas trilhas, escolhidas pela ORIGEM da linha e nao por perfil lido de novo:
+            // chamadoId marca a linha derivada do C4C (funcional/requisitante), cuja conversa vem
+            // por ConversaCasoSapDoChamado - o backend revalida o dono do chamado e descobre o caso
+            // sozinho, sem S-User e sem receber o correlationId da tela. Linha do BASIS nao tem
+            // chamadoId e segue pela trilha de baixo, inalterada.
+            if (sChamadoId) {
+                oModel.setProperty("/chatCarregandoSap", true);
+
+                return this._carregarConversaDoChamadoSap(sChamadoId, sId, iGeracao);
+            }
 
             if (!sCorrelationId) {
                 // Mesmo motivo do ramo de cache: a geracao ja subiu e o finally da leitura em voo
@@ -5056,36 +5509,8 @@ sap.ui.define([
 
                     return this._bolhasDoCasoSap(sCorrelationId, sSUser);
                 })
-                .then((aMensagens) => {
-                    // Clique em outro caso enquanto esta leitura viajava.
-                    if (iGeracao !== this._iGeracaoComentariosCasoSap || !aMensagens) {
-                        return false;
-                    }
-
-                    const sPathAtual = this._pathDoChatPorId(sId, "Sap");
-
-                    if (!sPathAtual) {
-                        return false;
-                    }
-
-                    // Mescla, nao substitui: mensagem digitada no FeedInput durante a leitura (sem
-                    // origemAlm) seria apagada por um setProperty seco.
-                    const aLocais = (oModel.getProperty(sPathAtual + "/mensagens") ?? [])
-                        .filter((oMensagem) => !oMensagem.origemAlm);
-                    const aTudo = aMensagens.concat(aLocais);
-
-                    oModel.setProperty(sPathAtual + "/mensagens", aTudo);
-                    oModel.setProperty(sPathAtual + "/comentariosCarregados", true);
-                    oModel.setProperty("/chatMensagensSap", aTudo);
-
-                    // O scrollTo sincrono de _selecionarChat rolaria a conversa ANTERIOR: o
-                    // setProperty so agenda o render. O timeout 0 cai depois da tarefa de rendering
-                    // do UI5, com as bolhas novas ja no DOM.
-                    window.setTimeout(
-                        () => this.byId("chatsMensagensScrollSap")?.scrollTo(0, 99999, 0), 0);
-
-                    return true;
-                })
+                .then((aMensagens) =>
+                    this._pintarMensagensDoCasoSap(sId, aMensagens, iGeracao))
                 .catch((oError) => {
                     Log.error("Falha ao carregar os comentarios do caso SAP " + sCorrelationId,
                         oError, "megawork.mwmonitorchamados.controller.Main");
@@ -5104,6 +5529,165 @@ sap.ui.define([
                         oModel.setProperty("/chatCarregandoSap", false);
                     }
                 });
+        },
+
+        // Cauda comum das duas trilhas da conversa SAP: re-resolve o path por id e pinta. Extraida
+        // para as duas nao divergirem na mescla nem no scroll.
+        _pintarMensagensDoCasoSap(sId, aMensagens, iGeracao) {
+            const oModel = this.getView().getModel("view");
+
+            // Clique em outro caso enquanto esta leitura viajava.
+            if (iGeracao !== this._iGeracaoComentariosCasoSap || !aMensagens) {
+                return false;
+            }
+
+            const sPathAtual = this._pathDoChatPorId(sId, "Sap");
+
+            if (!sPathAtual) {
+                return false;
+            }
+
+            // Mescla, nao substitui: mensagem digitada no FeedInput durante a leitura (sem
+            // origemAlm) seria apagada por um setProperty seco.
+            const aLocais = (oModel.getProperty(sPathAtual + "/mensagens") ?? [])
+                .filter((oMensagem) => !oMensagem.origemAlm);
+            const aTudo = aMensagens.concat(aLocais);
+
+            oModel.setProperty(sPathAtual + "/mensagens", aTudo);
+            oModel.setProperty(sPathAtual + "/comentariosCarregados", true);
+            oModel.setProperty("/chatMensagensSap", aTudo);
+
+            // O scrollTo sincrono de _selecionarChat rolaria a conversa ANTERIOR: o setProperty so
+            // agenda o render. O timeout 0 cai depois da tarefa de rendering do UI5, com as bolhas
+            // novas ja no DOM.
+            window.setTimeout(
+                () => this.byId("chatsMensagensScrollSap")?.scrollTo(0, 99999, 0), 0);
+
+            return true;
+        },
+
+        // Trilha dos perfis sem S-User: 1 chamada por clique, MESMO desenho da trilha do BASIS -
+        // contador de geracao, cache por linha (gravado em _pintarMensagensDoCasoSap), busy solto no
+        // finally so na geracao corrente e path re-resolvido por id. So a chave muda: sobe o ID do
+        // chamado, e quem descobre o caso na ALM e o backend.
+        _carregarConversaDoChamadoSap(sChamadoId, sId, iGeracao) {
+            const oModel = this.getView().getModel("view");
+
+            // Mesmo padrao de _verificarNotificacoesChats: manda o e-mail do shell quando existe e
+            // deixa o backend resolver pelo JWT quando nao (o _lerUsuarioLogado nunca rejeita).
+            return this._lerUsuarioLogado()
+                .then((sEmail) => this._lerConversaCasoSapDoChamado(sChamadoId, sEmail))
+                .then((oConversa) => {
+                    if (iGeracao !== this._iGeracaoComentariosCasoSap || !oConversa) {
+                        return false;
+                    }
+
+                    // Cabecalho antes das bolhas: escrito na LINHA (o objeto que
+                    // /chatSelecionadoSap referencia), pelo path re-resolvido por id.
+                    this._aplicarHeaderDoCasoSapNaLinha(sId, oConversa);
+
+                    // Truncamento e fato do backend (limit 200): mesmo aviso da trilha do BASIS.
+                    if (oConversa.truncado === true) {
+                        Log.warning("Chamado " + sChamadoId + ": " + oConversa.total
+                            + " comentarios na ALM, a conversa mostra " + oConversa.exibidos,
+                            null, "megawork.mwmonitorchamados.controller.Main");
+                    }
+
+                    // Prefixo do id da bolha: o correlationId quando o backend o devolveu, senao o
+                    // chamado - o id so precisa ser estavel dentro da conversa.
+                    const sChave = String(oConversa.correlationId ?? "").trim() || sChamadoId;
+
+                    const aMensagens = (oConversa.comentarios ?? [])
+                        .map((oComentario, iIndice) =>
+                            this._mapearComentarioSapParaChat(oComentario, sChave, iIndice))
+                        // Mesma ordenacao da trilha do BASIS: data ilegivel vira "" e cai no fim.
+                        .sort((oA, oB) => (oA.quando ? 0 : 1) - (oB.quando ? 0 : 1)
+                            || oA.quando.localeCompare(oB.quando));
+
+                    return this._pintarMensagensDoCasoSap(sId, aMensagens, iGeracao);
+                })
+                .catch((oError) => {
+                    Log.error("Falha ao carregar a conversa do caso SAP do chamado " + sChamadoId,
+                        oError, "megawork.mwmonitorchamados.controller.Main");
+
+                    // O toast so sai se a conversa que falhou for a que esta aberta na tela.
+                    if (iGeracao === this._iGeracaoComentariosCasoSap) {
+                        MessageToast.show(this._getResourceBundle()
+                            .getText("chatsSapErroCarregarComentarios"));
+                    }
+
+                    return false;
+                })
+                .finally(() => {
+                    // Soltar o busy fora da geracao corrente apagaria o indicador da leitura nova.
+                    if (iGeracao === this._iGeracaoComentariosCasoSap) {
+                        oModel.setProperty("/chatCarregandoSap", false);
+                    }
+                });
+        },
+
+        // Header do caso na propria linha: o cabecalho da conversa binda em
+        // /chatSelecionadoSap/nome e /departamento, e a linha e o MESMO objeto (o setProperty do
+        // JSONModel reavalia os dois bindings). Campo vazio NAO sobrescreve: header que falhou
+        // (headerFalha) nao pode apagar o numero do caso nem o titulo do chamado que a lista mostra.
+        _aplicarHeaderDoCasoSapNaLinha(sId, oConversa) {
+            const oModel = this.getView().getModel("view");
+            const sPathAtual = this._pathDoChatPorId(sId, "Sap");
+
+            if (!sPathAtual) {
+                return;
+            }
+
+            if (oConversa.headerFalha === true) {
+                Log.warning("Header do caso do chamado " + sId
+                    + " nao veio da ALM: cabecalho fica com os dados do chamado", null,
+                    "megawork.mwmonitorchamados.controller.Main");
+            }
+
+            const sCaseNumber = String(oConversa.caseNumber ?? "").trim();
+            const sSubject = String(oConversa.subject ?? "").trim();
+
+            if (sCaseNumber) {
+                oModel.setProperty(sPathAtual + "/nome", sCaseNumber);
+            }
+
+            if (sSubject) {
+                oModel.setProperty(sPathAtual + "/departamento", sSubject);
+            }
+        },
+
+        // $direct como as outras leituras SAP: sem isso a conversa entraria no $batch do C4C.
+        // email so entra quando o shell soube dizer quem e - sem ele o backend resolve pelo JWT.
+        _lerConversaCasoSapDoChamado(sChamadoId, sEmail) {
+            const oOperation = this.getOwnerComponent().getModel()
+                .bindContext("/ConversaCasoSapDoChamado(...)", null, { $$groupId: "$direct" });
+
+            oOperation.setParameter("chamadoId", sChamadoId);
+
+            if (sEmail) {
+                oOperation.setParameter("email", sEmail);
+            }
+
+            return oOperation.invoke()
+                .then(() => oOperation.getBoundContext().requestObject())
+                .finally(() => oOperation.destroy());
+        },
+
+        // Enriquecimento em LOTE da lista, irmao da leitura acima. $direct pelo mesmo motivo: no
+        // $batch default estes GETs lentos (2 na ALM por caso) segurariam a carga do C4C. email so
+        // entra quando o shell soube dizer quem e - sem ele o backend resolve pelo JWT. Nenhum
+        // correlationId sobe: o escopo e refeito no C4C do lado de la, a partir do e-mail.
+        _lerConversasCasoSapDoRequisitante(sEmail) {
+            const oOperation = this.getOwnerComponent().getModel()
+                .bindContext("/ConversasCasoSapDoRequisitante(...)", null, { $$groupId: "$direct" });
+
+            if (sEmail) {
+                oOperation.setParameter("email", sEmail);
+            }
+
+            return oOperation.invoke()
+                .then(() => oOperation.getBoundContext().requestObject())
+                .finally(() => oOperation.destroy());
         },
 
         // Sem cache (1 GET por abertura, como os campos) e com a guarda de _lerDetalheCasoSap: o
@@ -5366,26 +5950,27 @@ sap.ui.define([
                 .finally(() => oOperation.destroy());
         },
 
+        // A ALM manda "2021-06-01 12:00:00" em UTC: sem o T o parse fica por conta de extensao do
+        // engine e sem o Z o new Date leria como local, jogando a linha 3 h no futuro em UTC-3.
+        _dataDaAlmParaIsoLocal(vBruto) {
+            const sBruto = String(vBruto ?? "").trim();
+
+            // Fora desse formato o valor vai cru: _paraIsoLocal devolve "" no que nao entende.
+            return this._paraIsoLocal(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(sBruto)
+                ? sBruto.replace(" ", "T") + "Z"
+                : sBruto);
+        },
+
         // origemAlm marca a bolha vinda do backend: e por essa marca que a releitura sabe o que pode
         // substituir e o que e local do FeedInput (espelha o origemC4C do detalhe).
         _mapearComentarioSapParaChat(oComentario, sCorrelationId, iIndice) {
-            const sBruto = String(oComentario.quando ?? "").trim();
-
-            // A ALM manda "2021-06-01 12:00:00" em UTC: sem o T o parse fica por conta de extensao
-            // do engine e sem o Z o new Date leria como hora local, jogando a bolha 3 h no futuro em
-            // UTC-3. Fora desse formato o valor vai cru, e _paraIsoLocal - o unico produtor de data
-            // do modelo - devolve "" no que new Date nao entende.
-            const sQuando = /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(sBruto)
-                ? sBruto.replace(" ", "T") + "Z"
-                : sBruto;
-
             return {
                 id: sCorrelationId + "c" + iIndice,
                 // A ALM so devolve o S-User do autor; nome de pessoa nao existe neste endpoint.
                 autor: String(oComentario.autor ?? "").trim()
                     || this._getResourceBundle().getText("chatsSapAutorDesconhecido"),
                 texto: String(oComentario.texto ?? "").trim(),
-                quando: this._paraIsoLocal(sQuando),
+                quando: this._dataDaAlmParaIsoLocal(oComentario.quando),
                 // Direcao pelo type, nunca por createdBy: o colega da mesma empresa comenta com
                 // OUTRO S-User, e cruzar com o S-User da tela mandaria a mensagem dele para a
                 // esquerda com o avatar de cliente, como se a SAP tivesse escrito. Vazio ou
@@ -5394,6 +5979,392 @@ sap.ui.define([
                 eu: String(oComentario.tipo ?? "").trim() === TIPO_COMENTARIO_CLIENTE_SAP,
                 origemAlm: true
             };
+        },
+
+        // Sem cache (1 GET por abertura, como os campos) e com a guarda de _lerDetalheCasoSap: o
+        // contador _iGeracaoComentariosCasoSap e da lista de conversas, mexer nele mataria a de la.
+        _carregarAnexosDoCasoSap(sCorrelationId, sSUser) {
+            const oModelo = this._modeloCasoSap();
+
+            // Defensivo: onTicketPressSap ja barra o caso sem correlationId antes de abrir a tela.
+            if (!sCorrelationId) {
+                Log.warning("Anexos do detalhe SAP ignorados: caso sem correlationId", null,
+                    "megawork.mwmonitorchamados.controller.Main");
+
+                return Promise.resolve(false);
+            }
+
+            // Sequencia da carga, ALEM da guarda de correlationId: duas leituras do MESMO caso podem
+            // estar em voo (o botao Atualizar e a releitura obrigatoria depois do upload) e a que
+            // responder por ULTIMO venceria, mesmo tendo saido antes - o anexo que acabou de subir
+            // desapareceria da lista ate o refresh seguinte. So a carga mais recente escreve.
+            this._iCargaAnexosCasoSap = (this._iCargaAnexosCasoSap || 0) + 1;
+            const iCarga = this._iCargaAnexosCasoSap;
+
+            oModelo.setProperty("/anexosCarregando", true);
+
+            return this._lerAnexosDoCasoSap(sCorrelationId, sSUser)
+                .then((oResultado) => {
+                    // Resposta lenta de um caso abandonado listaria os anexos dele no caso aberto agora.
+                    if (iCarga !== this._iCargaAnexosCasoSap
+                        || oModelo.getProperty("/correlationId") !== sCorrelationId) {
+                        return false;
+                    }
+
+                    // Sem payload nao e lista vazia: calar aqui mostraria "nenhum anexo" para um caso
+                    // que pode ter anexo, escondendo que a leitura falhou.
+                    if (!oResultado) {
+                        oModelo.setProperty("/anexos", []);
+                        oModelo.setProperty("/anexosFalha", true);
+
+                        return false;
+                    }
+
+                    // Truncamento e fato do backend (limit 100): sem o aviso a tela afirma
+                    // silenciosamente que o caso tem menos anexo do que tem.
+                    if (oResultado.truncado === true) {
+                        Log.warning("Caso " + sCorrelationId + ": " + oResultado.total
+                            + " anexos na ALM, a tela mostra " + oResultado.exibidos, null,
+                            "megawork.mwmonitorchamados.controller.Main");
+                    }
+
+                    // SUBSTITUI, ao contrario do chat: o anexo lido da ALM e o mesmo que subiu e
+                    // voltaria duplicado. So a linha otimista em envio ainda nao esta la.
+                    const aEmVoo = (oModelo.getProperty("/anexos") ?? [])
+                        .filter((oAnexo) => oAnexo.enviando === true);
+
+                    oModelo.setProperty("/anexos", (oResultado.anexos ?? [])
+                        .map((oAnexo) => this._mapearAnexoDoCasoSap(oAnexo)).concat(aEmVoo));
+                    oModelo.setProperty("/anexosFalha", false);
+
+                    return true;
+                })
+                .catch((oError) => {
+                    Log.error("Falha ao carregar os anexos do caso SAP " + sCorrelationId, oError,
+                        "megawork.mwmonitorchamados.controller.Main");
+
+                    // Falha de uma carga vencida nao pode apagar a lista que a carga nova trouxe.
+                    if (iCarga !== this._iCargaAnexosCasoSap
+                        || oModelo.getProperty("/correlationId") !== sCorrelationId) {
+                        return false;
+                    }
+
+                    // Sem toast: a MessageStrip do cartao ja avisa e _lerDetalheCasoSap costuma
+                    // toastar junto (mesma origem) - dois toasts empilhados so atrapalham.
+                    oModelo.setProperty("/anexos", []);
+                    oModelo.setProperty("/anexosFalha", true);
+
+                    return false;
+                })
+                .finally(() => {
+                    // Resposta obsoleta soltaria o busy da leitura ainda em voo (do caso novo ou da
+                    // carga mais recente do mesmo caso); quem solta o busy e sempre a ultima carga.
+                    if (iCarga === this._iCargaAnexosCasoSap
+                        && oModelo.getProperty("/correlationId") === sCorrelationId) {
+                        oModelo.setProperty("/anexosCarregando", false);
+                    }
+                });
+        },
+
+        // Lista da ALM sem estado de tela: quem chama e dono do busy e do erro (mesmo contrato de
+        // _lerComentariosCasoSap). $direct porque sai no MESMO tick de DetalheCasoSap.
+        _lerAnexosDoCasoSap(sCorrelationId, sSUser) {
+            const oOperation = this.getOwnerComponent().getModel()
+                .bindContext("/AnexosCasoSap(...)", null, { $$groupId: "$direct" });
+
+            oOperation.setParameter("correlationId", sCorrelationId);
+            oOperation.setParameter("sUser", sSUser);
+
+            return oOperation.invoke()
+                .then(() => oOperation.getBoundContext().requestObject())
+                .finally(() => oOperation.destroy());
+        },
+
+        // origemAlm marca a linha vinda do backend, como o origemC4C do detalhe C4C: e por ela que a
+        // releitura sabe o que pode substituir e o que e linha otimista de upload.
+        _mapearAnexoDoCasoSap(oAnexo) {
+            return {
+                idAnexo: String(oAnexo.idAnexo ?? "").trim(),
+                nome: String(oAnexo.nome ?? "").trim(),
+                descricao: String(oAnexo.descricao ?? "").trim(),
+                // contentType da LISTAGEM: o GET do binario nao devolve header legivel pelo send()
+                // do CAP, entao o mimeType do download so pode sair daqui.
+                mimeType: String(oAnexo.contentType ?? "").trim(),
+                // A ALM nao manda tamanho neste endpoint; so a linha otimista conhece os bytes.
+                tamanho: "",
+                // So o S-User: nome de pessoa nao existe neste endpoint da ALM.
+                autor: String(oAnexo.criadoPor ?? "").trim(),
+                quando: this._dataDaAlmParaIsoLocal(oAnexo.criadoEm),
+                // Guardada para rastreio: o download vai pela function, com o idAttachment.
+                url: String(oAnexo.url ?? "").trim(),
+                baixando: false,
+                enviando: false,
+                origemAlm: true
+            };
+        },
+
+        // $direct: os ~13,4 MB de base64 nao entram no $batch das leituras, dentro de uma resposta
+        // multipart. Sem estado de tela, como as outras leituras SAP.
+        _lerConteudoAnexoCasoSap(sIdAnexo, sSUser, sNome) {
+            const oOperation = this.getOwnerComponent().getModel()
+                .bindContext("/AnexoCasoSapConteudo(...)", null, { $$groupId: "$direct" });
+
+            oOperation.setParameter("idAnexo", sIdAnexo);
+            oOperation.setParameter("sUser", sSUser);
+            oOperation.setParameter("nome", sNome);
+
+            return oOperation.invoke()
+                .then(() => oOperation.getBoundContext().requestObject())
+                .finally(() => oOperation.destroy());
+        },
+
+        // Baixa o anexo clicado do caso SAP. Os bytes vem da function, nunca da listagem: o GET de
+        // listagem da ALM devolve so metadado, e a url do Document Service nao e publica.
+        onDetalheCasoSapAnexoPress(oEvent) {
+            const oContext = oEvent.getSource().getBindingContext("casoSap");
+
+            if (!oContext) {
+                return;
+            }
+
+            const oModelo = this._modeloCasoSap();
+            const sPathAnexo = oContext.getPath();
+            const sIdAnexo = String(oContext.getProperty("idAnexo") ?? "").trim();
+            const sNome = String(oContext.getProperty("nome") ?? "").trim();
+            const sMimeType = String(oContext.getProperty("mimeType") ?? "").trim();
+
+            // Linha otimista de upload em voo: o POST de vinculo nao devolve idAttachment, entao ela
+            // so passa a baixar depois da releitura.
+            if (!sIdAnexo) {
+                MessageToast.show(this._getResourceBundle().getText("detalheCasoSapAnexoSemConteudo"));
+                return;
+            }
+
+            // Trava por linha: sem ela o duplo clique baixaria os ~13,4 MB duas vezes.
+            if (oContext.getProperty("baixando") === true) {
+                return;
+            }
+
+            oModelo.setProperty(sPathAnexo + "/baixando", true);
+
+            // S-User relido: o GET do binario exige reporter e o toggle de e-mail dev pode ter
+            // trocado o requisitante com o detalhe aberto.
+            this._lerSUserRequisitante()
+                .then((oResultado) => {
+                    const sSUser = String(oResultado?.sUser ?? "").trim();
+
+                    if (!sSUser) {
+                        Log.warning("Download de anexo SAP ignorado: requisitante sem S-User", null,
+                            "megawork.mwmonitorchamados.controller.Main");
+                        MessageToast.show(this._getResourceBundle().getText("detalheSapSemSUser"));
+
+                        return null;
+                    }
+
+                    return this._lerConteudoAnexoCasoSap(sIdAnexo, sSUser, sNome);
+                })
+                .then((oConteudo) => {
+                    if (!oConteudo) {
+                        return;
+                    }
+
+                    // O base64 NAO vai para o modelo: ficaria vivo na sessao inteira e viajaria em
+                    // cada clone da linha. mimeType da listagem porque o download vem sem header.
+                    this._baixarArquivoBase64(
+                        oConteudo.base64 ?? "",
+                        oConteudo.nome || sNome,
+                        oConteudo.mimeType || sMimeType || MIME_TYPE_PADRAO_ANEXO
+                    );
+                })
+                .catch((oError) => {
+                    Log.error("Falha ao baixar o anexo " + sIdAnexo + " do caso SAP", oError,
+                        "megawork.mwmonitorchamados.controller.Main");
+                    MessageToast.show(this._getResourceBundle()
+                        .getText("detalheCasoSapAnexoErroBaixar"));
+                })
+                .finally(() => {
+                    // O path do item tambem e um indice ("/anexos/2") e a lista pode ter sido relida
+                    // no meio: sem conferir a chave, o flag cairia em outro anexo.
+                    if (oModelo.getProperty(sPathAnexo + "/idAnexo") === sIdAnexo) {
+                        oModelo.setProperty(sPathAnexo + "/baixando", false);
+                    }
+                });
+        },
+
+        // Anexa arquivos a um caso SAP que JA existe. Uma action por arquivo (dois POSTs na ALM lado
+        // do backend) e releitura no fim, que e o que da idAttachment - logo, download - as linhas.
+        onDetalheCasoSapAnexoAdicionar(oEvent) {
+            const oUploader = oEvent.getSource();
+            const oModelo = this._modeloCasoSap();
+            const oBundle = this._getResourceBundle();
+            const sCorrelationId = String(oModelo.getProperty("/correlationId") ?? "").trim();
+
+            if (!sCorrelationId) {
+                MessageToast.show(oBundle.getText("chatsSapCasoSemCorrelationId"));
+                oUploader.setValue("");
+                return;
+            }
+
+            // /caso nulo NAO e caso sem instalacao: e leitura do detalhe que falhou (o cartao de
+            // anexos carrega por conta propria e continua visivel). Dizer "este caso nao tem numero de
+            // instalacao" aqui seria mentira, e o usuario iria procurar cadastro errado na SAP em vez
+            // de so atualizar a tela.
+            if (!oModelo.getProperty("/caso")) {
+                Log.warning("Envio de anexo SAP bloqueado: detalhe do caso ainda nao carregado",
+                    sCorrelationId, "megawork.mwmonitorchamados.controller.Main");
+                MessageToast.show(oBundle.getText("detalheSapErroCarregar"));
+                oUploader.setValue("");
+                return;
+            }
+
+            // installation e OBRIGATORIO no POST do anexo e vive em /caso (payload do detalhe): sem
+            // ele a SAP devolveria 400 generico, entao nem vale chamar.
+            const sInstallationNumber = String(oModelo.getProperty("/caso/installationNumber") ?? "").trim();
+
+            if (!sInstallationNumber) {
+                Log.warning("Envio de anexo SAP bloqueado: caso sem numero de instalacao",
+                    sCorrelationId, "megawork.mwmonitorchamados.controller.Main");
+                MessageToast.show(oBundle.getText("detalheCasoSapAnexoSemInstalacao"));
+                oUploader.setValue("");
+                return;
+            }
+
+            // Rede de seguranca: o enabled do FileUploader ja bloqueia o envio em andamento.
+            if (oModelo.getProperty("/anexosEnviando") === true) {
+                oUploader.setValue("");
+                return;
+            }
+
+            // Lista da SAP e nao a do C4C: a ALM aceita o .7z com 200 e joga o arquivo fora calada.
+            const aFiles = this._filtrarAnexosPermitidos(
+                Array.from(oEvent.getParameter("files") ?? []), EXTENSOES_ANEXO_SAP,
+                "abrirChamadoSapAnexoTipoInvalido");
+
+            if (!aFiles.length) {
+                oUploader.setValue("");
+                return;
+            }
+
+            // As vagas contam o que ainda esta em voo, nao o total do caso: as leituras base64
+            // comecam TODAS no mesmo tick e um Ctrl+A deixaria centenas de MB vivos na aba.
+            const iVagas = Math.max(MAX_ANEXOS_PENDENTES - (oModelo.getProperty("/anexos") ?? [])
+                .filter((oLinha) => oLinha.enviando === true).length, 0);
+
+            if (aFiles.length > iVagas) {
+                MessageToast.show(oBundle.getText("criarChamadoAnexoLimiteQuantidade",
+                    [String(MAX_ANEXOS_PENDENTES)]));
+            }
+
+            if (!iVagas) {
+                oUploader.setValue("");
+                return;
+            }
+
+            // A leitura base64 comeca ANTES do setValue("") abaixo: o objeto File morre quando o
+            // FileUploader e limpo, e o que sobrevive ate o POST e a promise, nao o File.
+            const aPendentes = aFiles.slice(0, iVagas).map((oFile) => ({
+                nome: oFile.name,
+                mimeType: oFile.type || MIME_TYPE_PADRAO_ANEXO,
+                tamanho: this._formatarTamanhoArquivo(oFile.size),
+                pBase64: this._lerAnexoComoBase64(oFile)
+            }));
+
+            // Limpa o value para o mesmo arquivo poder ser reselecionado depois (com
+            // sameFilenameAllowed, e o que faz o change disparar de novo).
+            oUploader.setValue("");
+
+            const aLinhasOtimistas = aPendentes.map((oAnexo) => ({
+                idAnexo: "",
+                nome: oAnexo.nome,
+                descricao: "",
+                mimeType: oAnexo.mimeType,
+                tamanho: oAnexo.tamanho,
+                autor: "",
+                quando: this._agoraIso(),
+                url: "",
+                baixando: false,
+                enviando: true,
+                origemAlm: false
+            }));
+
+            // Array novo: push in place nao reavalia o noData da List nem o busy dos itens.
+            oModelo.setProperty("/anexos",
+                (oModelo.getProperty("/anexos") ?? []).concat(aLinhasOtimistas));
+            oModelo.setProperty("/anexosEnviando", true);
+
+            // Guardado fora da cadeia: o finally precisa dele para a releitura obrigatoria.
+            let sSUserEnvio = "";
+
+            this._lerSUserRequisitante()
+                .then((oResultado) => {
+                    // Trocou de caso durante a espera do S-User: o POST iria para o caso errado.
+                    if (oModelo.getProperty("/correlationId") !== sCorrelationId) {
+                        return { iEnviados: 0, aFalharam: [] };
+                    }
+
+                    const sSUser = String(oResultado?.sUser ?? "").trim();
+
+                    if (!sSUser) {
+                        Log.warning("Envio de anexo SAP ignorado: requisitante sem S-User",
+                            sCorrelationId, "megawork.mwmonitorchamados.controller.Main");
+                        MessageToast.show(oBundle.getText("detalheSapSemSUser"));
+
+                        return { iEnviados: 0, aFalharam: aPendentes.map((oAnexo) => oAnexo.nome) };
+                    }
+
+                    sSUserEnvio = sSUser;
+
+                    return this._enviarAnexosAoCasoSap(sCorrelationId, sSUser, sInstallationNumber,
+                        aPendentes);
+                })
+                .then((oEnvio) => {
+                    // Desfecho do caso abandonado apareceria como aviso do caso que esta na tela.
+                    if (oModelo.getProperty("/correlationId") !== sCorrelationId) {
+                        return;
+                    }
+
+                    if (!oEnvio.aFalharam.length) {
+                        MessageToast.show(oEnvio.iEnviados === 1
+                            ? oBundle.getText("detalheCasoSapAnexoEnviadoUm")
+                            : oBundle.getText("detalheCasoSapAnexoEnviadoVarios",
+                                [String(oEnvio.iEnviados)]));
+                    } else if (!oEnvio.iEnviados) {
+                        MessageToast.show(oBundle.getText("detalheCasoSapAnexoErroEnviar"));
+                    } else {
+                        // Parcial com os nomes: generico nao serve, o usuario precisa saber o que
+                        // reenviar.
+                        MessageToast.show(oBundle.getText("detalheCasoSapAnexoEnvioParcial",
+                            [String(oEnvio.iEnviados), String(aPendentes.length),
+                                oEnvio.aFalharam.join(", ")]));
+                    }
+                })
+                .catch((oError) => {
+                    // _enviarAnexosAoCasoSap nunca rejeita: aqui so cai falha de infra (a leitura do
+                    // S-User, por exemplo).
+                    Log.error("Falha ao anexar arquivos ao caso SAP " + sCorrelationId, oError,
+                        "megawork.mwmonitorchamados.controller.Main");
+
+                    if (oModelo.getProperty("/correlationId") === sCorrelationId) {
+                        MessageToast.show(oBundle.getText("detalheCasoSapAnexoErroEnviar"));
+                    }
+                })
+                .finally(() => {
+                    if (oModelo.getProperty("/correlationId") !== sCorrelationId) {
+                        return;
+                    }
+
+                    // As linhas otimistas saem por REFERENCIA, nao por enviando === true: outro
+                    // envio em voo no mesmo caso tem linhas proprias, que devem ficar.
+                    oModelo.setProperty("/anexos", (oModelo.getProperty("/anexos") ?? [])
+                        .filter((oLinha) => aLinhasOtimistas.indexOf(oLinha) < 0));
+                    oModelo.setProperty("/anexosEnviando", false);
+
+                    // Releitura obrigatoria: o POST de vinculo devolve so o id do CASO, entao sem
+                    // ela a linha nova ficaria sem idAttachment e nunca baixaria.
+                    if (sSUserEnvio) {
+                        this._carregarAnexosDoCasoSap(sCorrelationId, sSUserEnvio);
+                    }
+                });
         },
 
         // "Chats" (C4C): resolve a linha real do ticket pelo ID e reusa _carregarChatDoTicket (o
@@ -5588,6 +6559,17 @@ sap.ui.define([
             const oModel = this.getView().getModel("view");
             const oBundle = this._getResourceBundle();
             const sCorrelationId = String(oChat.correlationId ?? "").trim();
+
+            // Recusa no codigo, nao so no enabled do XML: o enabled e cosmetico e um post disparado
+            // por outro caminho gravaria de verdade no caso da SAP. Funcional e requisitante leem a
+            // conversa pelo chamado e nao tem S-User; o envio e do BASIS.
+            if (!this._ehFuncionarioBasis()) {
+                Log.warning("Envio ao caso SAP bloqueado: perfil sem permissao de escrita", null,
+                    "megawork.mwmonitorchamados.controller.Main");
+                MessageToast.show(oBundle.getText("chatsSapEnvioBloqueadoPerfil"));
+
+                return;
+            }
 
             // Antes de pintar a bolha: pintada e removida em seguida, ela piscaria sem motivo.
             if (!sCorrelationId) {
