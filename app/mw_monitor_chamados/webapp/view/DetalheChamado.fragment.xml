@@ -234,7 +234,7 @@
                                         icon="sap-icon://sap-logo-shape"
                                         type="Emphasized"
                                         press=".onDetalheAbrirChamadoSap"
-                                        visible="{= ${view>/requisitanteEhFuncionario} }"/>
+                                        visible="{= ${view>/requisitanteEhFuncionarioBasis} }"/>
                                 </VBox>
                             </VBox>
                         </f:content>

@@ -3,6 +3,94 @@ const cds = require("@sap/cds");
 const LOG = cds.log("app-service");
 
 const EMAIL_CONTATO_DEV = "Thor.boantti@test.com.br";
+
+// Identidade do dono do badge de chat. Existe porque a chave de ChatVisualizacoes e
+// (usuario, ticketId): errar o e-mail faz TODOS os usuarios dividirem a mesma linha e um zerar o
+// badge do outro. Regra por perfil:
+//  - development: mantem o trio de hoje (req.data.email primeiro), senao o cds watch local, que
+//    nao tem JWT nenhum, ficaria sem identidade e sem notificacao;
+//  - producao: o JWT MANDA, porque req.data.email vem do navegador e qualquer cliente poderia
+//    passar o e-mail de outro. O fallback pro req.data.email fica de reserva DELIBERADA: se o
+//    xsuaa nao popular attr.email no Work Zone, o app degrada em vez de ficar sem sino algum -
+//    e o LOG.warn marca exatamente esse caso pra nao virar comportamento silencioso.
+// Deteccao de perfil: cds.env.profiles (["development"] no cds watch) OU as variaveis que so
+// existem dentro do Cloud Foundry - a segunda cobre o caso de o perfil nao ser propagado no
+// deploy. VCAP_APPLICATION vem antes de proposito: o CF sempre a injeta, enquanto VCAP_SERVICES
+// so aparece quando ha binding - um deploy de troubleshooting sem binding cairia em development
+// e voltaria a aceitar o e-mail que o navegador mandar.
+function ehProducao() {
+    const aPerfis = (cds.env && cds.env.profiles) || [];
+    return (Array.isArray(aPerfis) && aPerfis.includes("production"))
+        || !!process.env.VCAP_APPLICATION
+        || !!process.env.VCAP_SERVICES;
+}
+
+// Normaliza SEMPRE: a chave do HANA e case-sensitive e a gravacao ja fazia trim enquanto a
+// leitura nao - so isso ja bastava pra "Fulano@x" e "fulano@x " virarem linhas diferentes.
+function resolverEmailDoChat(req) {
+    const sEmailInformado = String((req.data && req.data.email) || "").trim();
+    const sEmailLogado = String((req.user && req.user.attr && req.user.attr.email) || "").trim();
+
+    if (!ehProducao()) {
+        return (sEmailInformado || sEmailLogado || EMAIL_CONTATO_DEV).trim().toLowerCase();
+    }
+
+    if (sEmailLogado) {
+        return sEmailLogado.trim().toLowerCase();
+    }
+
+    if (sEmailInformado) {
+        LOG.warn("JWT sem attr.email em producao: usando o e-mail informado pelo frontend como "
+            + "fallback do badge de chat. Conferir o escopo/atributo do xsuaa.");
+        return sEmailInformado.trim().toLowerCase();
+    }
+
+    // Ultimo recurso antes de nao ter identidade nenhuma: no xsuaa/IAS o req.user.id costuma ser
+    // o proprio logon, que neste subaccount e o e-mail. So vale se PARECER e-mail - o id tecnico
+    // ("sb-mw-...") viraria uma chave compartilhada por todos, que e exatamente o bug 4.1.
+    const sIdLogado = String((req.user && req.user.id) || "").trim();
+    if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(sIdLogado)) {
+        LOG.warn("JWT sem attr.email e sem e-mail informado: usando o id do usuario logado como "
+            + "identidade do badge de chat. Conferir o atributo email do xsuaa.");
+        return sIdLogado.toLowerCase();
+    }
+
+    // Sem identidade nenhuma. Quem chama TEM de tratar: consultar/gravar com "" faria todos os
+    // usuarios nessa condicao dividirem a mesma linha de ChatVisualizacoes.
+    return "";
+}
+
+// Identidade do REQUISITANTE. O e-mail informado pelo frontend VENCE em qualquer perfil, inclusive
+// CF: os ToggleButtons PROVISORIOs do ToolHeader mandam o e-mail escolhido e sao hoje o unico jeito
+// de homologar a regra BASIS no Work Zone - com o JWT vencendo, clicar em EDI/PCOE la nao mudava
+// nada e a homologacao media sempre o proprio testador.
+// O preco esta assumido e registrado: desde o campo basis esta function nao responde so "quem sou
+// eu", responde tambem "o que eu posso ver", entao enquanto os botoes existirem um cliente pode
+// pedir a identidade de um BASIS e receber basis=true. A regra e de UI e a IntegrationService nao
+// tem @requires/@restrict nenhum, entao nao ha segunda barreira. O LOG.warn abaixo e o rastro
+// disso: quando os botoes sairem (ver "Remover o botao e o handler antes de ir para producao" na
+// view), este ramo sai junto e o JWT volta a mandar sozinho.
+// Nao reusa resolverEmailDoChat porque aquela normaliza para minuscula: a chave de
+// ChatVisualizacoes e local, mas este e-mail vai cru para o EMailURI da ContactQueryByElements e
+// para o filtro Email da EmployeeCollection, comparacoes exatas do C4C - baixar a caixa aqui
+// transformaria requisitante existente em "nao encontrado".
+function resolverEmailDoRequisitante(req) {
+    const emailInformado = String((req.data && req.data.email) || "").trim();
+    const emailLogado = String((req.user && req.user.attr && req.user.attr.email) || "").trim();
+
+    if (!ehProducao()) {
+        return emailInformado || emailLogado || EMAIL_CONTATO_DEV;
+    }
+
+    // PROVISORIO (homologacao): sai junto com os ToggleButtons da view.
+    if (emailInformado) {
+        LOG.warn(`E-mail de homologacao vencendo o JWT em ambiente CF: requisitante (e basis) `
+            + `resolvidos por ${emailInformado} no lugar de ${emailLogado || "<JWT sem attr.email>"}.`);
+        return emailInformado;
+    }
+
+    return emailLogado;
+}
 // Nome totalmente qualificado (db/schema.cds): passado como STRING para SELECT/UPSERT porque a
 // entidade e local (persistida), nao exposta em nenhuma projection da IntegrationService.
 const CHAT_VISUALIZACOES = "megawork.mwmonitorchamados.ChatVisualizacoes";
@@ -11,6 +99,10 @@ const CHAT_VISUALIZACOES = "megawork.mwmonitorchamados.ChatVisualizacoes";
 const TYPE_CODES_MENSAGEM_CHAT = ["10007", "10008"];
 const TYPE_CODE_DESCRICAO = "10004";
 const STATUS_INICIAL_CHAMADO = "Z6";
+
+// OrgUnitID (String(20) FixedLength no C4C) das duas unidades que operam o SAP; guardado em
+// maiuscula porque a comparacao e feita com trim + toUpperCase - o C4C devolve o codigo padded.
+const ORG_UNITS_BASIS = new Set(["BASISID", "AMSBASIS"]);
 
 // SUPOSICAO a confirmar no tenant: "2" = documento/arquivo anexado (o "3" seria link, usado
 // com DocumentLink). O valor NAO esta no ticket.edmx - a
@@ -100,7 +192,50 @@ const MAXIMO_TOTAL_CHAMADOS_C4C = 20000;
 
 // Lotes em serie levavam ~6 min: a latencia da ALM por chamada e que domina, nao a CPU.
 // Sobreviveu a remocao do handler ChamadosSap: ChamadosComMensagemNova usa o mesmo knob de 429.
-const LOTES_SIMULTANEOS_CHAMADOS_SAP = Number(process.env.SAP_LOTES_SIMULTANEOS || 6);
+// || fora do Number, igual a constante dos clientes: env nao numerica daria NaN e o
+// Array.from({length: NaN}) do emParalelo nao criaria trabalhador nenhum - o poll devolveria
+// "ninguem tem mensagem nova" em silencio, com HTTP 200.
+const LOTES_SIMULTANEOS_CHAMADOS_SAP = Number(process.env.SAP_LOTES_SIMULTANEOS) || 6;
+
+// Rede de seguranca do "chamado recem-aberto nao notifica": a consulta ordenada por CreatedOn foi
+// MEDIDA estavel neste tenant (20/20 execucoes, mesmo valor), mas este arquivo ja documenta que o
+// parser do C4C as vezes devolve VAZIO SEM ERRO - e vazio, aqui, significaria "sem mensagem".
+// Com a env em "0" o fallback legado morre sem deploy; ligado, ele so roda no caso raro
+// (consulta ordenada vazia E chamado ja visualizado), entao nao dobra o custo do poll.
+const REDE_SEGURANCA_LIGADA = process.env.SAP_NOTIFICACAO_REDE_SEGURANCA !== "0";
+
+// A ultima interacao do chamado costuma ser a que interessa, mas interacao SEM texto existe
+// (assunto preenchido e corpo vazio) e o chat nao a mostra: buscar um punhado em vez de uma so
+// permite pular as vazias sem uma segunda ida ao C4C. Todas vazias = nenhuma interacao conta,
+// que e o resultado conservador (nao acende sino por conversa que o usuario nao veria mudar).
+const TOPO_INTERACOES_COM_TEXTO = 5;
+
+// Teto DEFENSIVO do lote (o frontend ja corta antes): cada chamado custa ate 2 GETs no C4C, e um
+// cliente desatualizado mandando os 100 da lista estouraria o tenant sozinho.
+const MAXIMO_CHAMADOS_POLL_NOTIFICACOES = 30;
+
+// Linha-MARCO da semeadura do badge (D5): ticketId reservado que nao existe no C4C (ID de
+// chamado e numerico) e guarda QUANDO o badge passou a valer para o usuario. O gatilho NAO pode
+// ser "o usuario nao tem nenhuma linha": um unico MarcarChatVisualizado antes do primeiro poll
+// desligaria a semeadura para sempre, e ai todo chamado sem linha voltaria a acender de uma vez.
+const TICKET_ID_MARCO_SEMEADURA = "*";
+
+// A data da ultima mensagem e do CHAMADO, nao de quem pergunta, entao da pra dividir a consulta.
+// O ganho REAL e menor do que parece: cada usuario so enxerga os chamados em que ele e
+// requisitante ou executor (filtro de escopo do frontend), entao dois usuarios quase nunca
+// perguntam pelo mesmo objectID, e o TTL e menor que o intervalo do poll (60 s), entao o mesmo
+// usuario tambem nao acerta o proprio cache em regime. Quem realmente aproveita: aba duplicada,
+// a rajada do visibilitychange e chamado com requisitante e executor olhando ao mesmo tempo.
+// 30 s (e nao 60 s+) de proposito: e a data que aparece na lista de chats, e servi-la vencida
+// por mais de meia rodada atrasaria a conversa visivelmente sem economizar quase nada.
+const TTL_CACHE_ULTIMA_MENSAGEM_MS = 30 * 1000;
+
+// Processo vive semanas no CF: Map indexado por objectID sem teto vira leak.
+const MAXIMO_ENTRADAS_CACHE_ULTIMA_MENSAGEM = 500;
+
+// Chave = objectID, NUNCA o usuario: guarda a data da ultima mensagem, jamais a decisao
+// mensagemNova (essa depende do visualizadoEm de cada um e e recalculada a cada chamada).
+const cacheUltimaMensagemPorChamado = new Map();
 
 // Env propria: SAP_LOTES_SIMULTANEOS e o knob do 429 da ALM, este e do C4C, que tem outro limite.
 // || fora do Number: env nao numerica daria NaN e Array.from({length: NaN}) zeraria os lotes.
@@ -194,6 +329,66 @@ function linhasDaResposta(resposta) {
     return Object.keys(corpo).length ? [corpo] : [];
 }
 
+// O cliente odata-v2 do CAP NAO converte data: CreatedOn chega como a string "/Date(1786125333406)/"
+// e new Date() nela devolve Invalid Date (MEDIDO no tenant). Como as datas comparadas aqui vem de
+// tres origens diferentes (C4C, HANA e ISO), tudo vira epoch em ms antes de qualquer comparacao.
+// Mesma regex do frontend (_paraIsoLocal) pra nao haver dois entendimentos do mesmo formato.
+function paraMs(vData) {
+    if (vData === null || vData === undefined || vData === "") return null;
+    if (vData instanceof Date) return Number.isNaN(vData.getTime()) ? null : vData.getTime();
+    if (typeof vData === "number") return Number.isFinite(vData) ? vData : null;
+
+    const aMatch = /\/Date\((-?\d+)/.exec(String(vData));
+    const oData = aMatch ? new Date(Number(aMatch[1])) : new Date(String(vData));
+
+    return Number.isNaN(oData.getTime()) ? null : oData.getTime();
+}
+
+// Maior de dois instantes tolerando null dos dois lados (chamado pode ter so uma das fontes).
+function maiorOuNull(iA, iB) {
+    if (iA === null || iA === undefined) return iB ?? null;
+    if (iB === null || iB === undefined) return iA;
+    return Math.max(iA, iB);
+}
+
+// Expira por TTL e, se ainda passar do teto, descarta as mais antigas (Map guarda a ordem de
+// insercao): so o TTL nao seguraria um pico de chamados distintos no mesmo instante.
+function limparCacheUltimaMensagem() {
+    const iAgora = Date.now();
+
+    for (const [sChave, oEntrada] of cacheUltimaMensagemPorChamado) {
+        if (iAgora - oEntrada.quando >= TTL_CACHE_ULTIMA_MENSAGEM_MS) {
+            cacheUltimaMensagemPorChamado.delete(sChave);
+        }
+    }
+
+    while (cacheUltimaMensagemPorChamado.size > MAXIMO_ENTRADAS_CACHE_ULTIMA_MENSAGEM) {
+        cacheUltimaMensagemPorChamado.delete(cacheUltimaMensagemPorChamado.keys().next().value);
+    }
+}
+
+// Toda escrita passa por aqui para o teto valer de verdade: a limpeza avulsa roda uma vez por
+// invocacao, ANTES do lote inserir, entao com chamadas concorrentes o Map passava do teto entre
+// uma poda e outra.
+function gravarCacheUltimaMensagem(sObjectID, iUltima) {
+    cacheUltimaMensagemPorChamado.set(sObjectID, { quando: Date.now(), iUltima });
+    limparCacheUltimaMensagem();
+}
+
+// Confere o TTL na leitura tambem: a limpeza roda uma vez por chamada e o lote pode demorar mais
+// que a janela, o que serviria data vencida no fim da varredura.
+function lerCacheUltimaMensagem(sObjectID) {
+    const oEntrada = cacheUltimaMensagemPorChamado.get(sObjectID);
+    if (!oEntrada) return null;
+
+    if (Date.now() - oEntrada.quando >= TTL_CACHE_ULTIMA_MENSAGEM_MS) {
+        cacheUltimaMensagemPorChamado.delete(sObjectID);
+        return null;
+    }
+
+    return oEntrada;
+}
+
 // Blindagem de shape: com kind "odata-v2" o cliente remoto do CAP ja desembrulha o envelope
 // {d:{results:[...]}} do C4C, entao linhasDaResposta normalmente so repassa o array. Ela cobre o
 // caso de a resposta chegar crua (kind diferente, mock ou erro de negociacao) e normaliza a
@@ -235,7 +430,9 @@ async function buscarFuncionarioPorEmail(servico, email) {
             SELECT.from(EmployeeCollection)
                 .columns(
                     "BusinessPartnerID",
-                    "BusinessPartnerFormattedName"
+                    "BusinessPartnerFormattedName",
+                    // Liga na EmployeeOrganisationalUnitAssignmentCollection; fora do $select viria undefined.
+                    "EmployeeID"
                 )
                 .where({ Email: email })
         ));
@@ -253,6 +450,36 @@ async function buscarFuncionarioPorEmail(servico, email) {
             `tratando como requisitante nao encontrado: ${erro.message}`
         );
         return null;
+    }
+}
+
+// Mesmo servico/EDMX do Employee, entao segue CQN - so muda a colecao, sem novo cds.connect.to.
+// Nunca lanca: sem EmployeeID, sem atribuicao ou falha tecnica => false (menos privilegio).
+async function funcionarioEhBasis(servico, employeeID) {
+    const sEmployeeID = String(employeeID == null ? "" : employeeID).trim();
+    if (!sEmployeeID) {
+        LOG.warn("Funcionario sem EmployeeID: tratando como fora de BASIS.");
+        return false;
+    }
+
+    try {
+        const { EmployeeOrganisationalUnitAssignmentCollection } = servico.entities;
+        const linhas = linhasDaResposta(await servico.run(
+            SELECT.from(EmployeeOrganisationalUnitAssignmentCollection)
+                .columns("OrgUnitID")
+                .where({ EmployeeID: sEmployeeID })
+        ));
+
+        // Um EmployeeID tem varias linhas (vigencia e papeis) e basta UMA bater; OrgUnitID e
+        // FixedLength no C4C, entao vem padded - trim antes do toUpperCase.
+        return linhas.some((linha) => ORG_UNITS_BASIS.has(
+            String((linha && linha.OrgUnitID) || "").trim().toUpperCase()));
+    } catch (erro) {
+        LOG.warn(
+            `Falha ao consultar EmployeeOrganisationalUnitAssignmentCollection para o ` +
+            `EmployeeID ${sEmployeeID}; tratando como fora de BASIS: ${erro.message}`
+        );
+        return false;
     }
 }
 
@@ -390,6 +617,27 @@ async function lerContatosC4C(servico, filtro) {
     ));
 }
 
+// Pagina do endpoint contacts, comum as duas varreduras. Nao trata erro: quem chama traduz para 502.
+async function lerPaginaContatosSap(calmItsmService, customerNumber, lidos, filtros = {}) {
+    const parametros = new URLSearchParams({
+        customerNumber,
+        ...filtros,
+        // Sem ALL o default e ADMIN e quem nao tem "Edit Authorizations" some da lista.
+        authorizationObjects: "ALL",
+        offset: String(lidos),
+        limit: String(LIMITE_CONTATOS_SAP)
+    });
+
+    const resposta = await calmItsmService.send({
+        method: "GET",
+        path: `/supportcases/masterdata/contacts?${parametros}`
+    });
+
+    const linhas = Array.isArray(resposta?.results) ? resposta.results : [];
+
+    return { linhas, total: Number(resposta?.totalCount ?? linhas.length) };
+}
+
 // Devolve lidos/total junto com o contato porque varredura truncada e cadastro inexistente dao
 // o mesmo 404 na tela e so o log separa os dois. Nao trata erro: quem chama traduz para 502.
 async function varrerContatosSap(calmItsmService, email, customerNumber) {
@@ -399,22 +647,10 @@ async function varrerContatosSap(calmItsmService, email, customerNumber) {
     let primeiroDaPaginaAnterior = "";
 
     for (let pagina = 0; pagina < MAXIMO_PAGINAS_CONTATOS_SAP; pagina += 1) {
-        const parametros = new URLSearchParams({
-            customerNumber,
-            email,
-            // Sem ALL o default e ADMIN e quem nao tem "Edit Authorizations" some da lista.
-            authorizationObjects: "ALL",
-            offset: String(lidos),
-            limit: String(LIMITE_CONTATOS_SAP)
-        });
+        const { linhas, total: totalDaPagina } = await lerPaginaContatosSap(
+            calmItsmService, customerNumber, lidos, { email });
 
-        const resposta = await calmItsmService.send({
-            method: "GET",
-            path: `/supportcases/masterdata/contacts?${parametros}`
-        });
-
-        const linhas = Array.isArray(resposta?.results) ? resposta.results : [];
-        total = Number(resposta?.totalCount ?? linhas.length);
+        total = totalDaPagina;
         lidos += linhas.length;
 
         // "email" nao existe no spec: a API pode ignorar o filtro e devolver a lista inteira.
@@ -437,6 +673,43 @@ async function varrerContatosSap(calmItsmService, email, customerNumber) {
     }
 
     return { pessoa, lidos, total };
+}
+
+// Lista inteira de S-Users do customer para a ajuda de valor; devolve os totais junto porque so
+// eles distinguem lista completa de varredura truncada. Nao trata erro: quem chama traduz para 502.
+async function varrerTodosContatosSap(calmItsmService, customerNumber) {
+    const pessoas = [];
+    const vistos = new Set();
+    let lidos = 0;
+    let total = 0;
+    let primeiroDaPaginaAnterior = "";
+
+    for (let pagina = 0; pagina < MAXIMO_PAGINAS_CONTATOS_SAP; pagina += 1) {
+        const { linhas, total: totalDaPagina } = await lerPaginaContatosSap(
+            calmItsmService, customerNumber, lidos);
+
+        total = totalDaPagina;
+        lidos += linhas.length;
+
+        for (const linha of linhas) {
+            // O mesmo S-User volta uma vez por authorization object e sairia repetido na lista.
+            const chave = String(linha?.suser ?? "").trim().toUpperCase();
+
+            if (!chave || vistos.has(chave)) continue;
+
+            vistos.add(chave);
+            pessoas.push(linha);
+        }
+
+        // API que ignorasse o offset devolveria a mesma pagina ate estourar o rate limit.
+        const primeiro = String(linhas[0]?.suser ?? "");
+        const paginaRepetida = Boolean(primeiro) && primeiro === primeiroDaPaginaAnterior;
+        primeiroDaPaginaAnterior = primeiro;
+
+        if (!linhas.length || paginaRepetida || lidos >= total) break;
+    }
+
+    return { pessoas, lidos, total };
 }
 
 function contatoSapComoResposta(pessoa) {
@@ -749,9 +1022,16 @@ module.exports = cds.service.impl(async function () {
     });
 
     this.on("Requisitante", async (req) => {
-        const emailInformado = (req.data.email || "").trim();
-        const emailLogado = (req.user && req.user.attr && req.user.attr.email) || "";
-        const email = emailInformado || emailLogado || EMAIL_CONTATO_DEV;
+        const email = resolverEmailDoRequisitante(req);
+
+        // Sem identidade nenhuma o EMailURI vazio faria a ContactQueryByElements devolver a
+        // primeira linha do tenant e o app assumiria o contato de outra pessoa. Resposta neutra:
+        // o frontend ja bloqueia a tela quando origem vem vazia.
+        if (!email) {
+            LOG.warn("Requisitante sem e-mail utilizavel (JWT sem attr.email e nada informado): "
+                + "devolvendo requisitante vazio.");
+            return { nome: "", contatoId: "", clientes: [], origem: "", basis: false };
+        }
 
         let resposta;
         try {
@@ -781,7 +1061,13 @@ module.exports = cds.service.impl(async function () {
         // quem decide bloquear a tela continua sendo o frontend.
         if (!contatoId) {
             const funcionario = await buscarFuncionarioPorEmail(employeeAndUserService, email);
-            if (!funcionario) return { nome: "", contatoId: "", clientes: [], origem: "" };
+            if (!funcionario) {
+                return { nome: "", contatoId: "", clientes: [], origem: "", basis: false };
+            }
+
+            // Segunda consulta e nao expand: o escopo da lista NAO muda com o basis, ele so decide
+            // o que a UI mostra - por isso nao rejeita nem bloqueia quando a consulta falha.
+            const ehBasis = await funcionarioEhBasis(employeeAndUserService, funcionario.EmployeeID);
 
             // BusinessPartnerID e o identificador que o C4C aceita em BuyerMainContactPartyID;
             // vazio aqui = o frontend trata como "nao achou" e bloqueia a tela.
@@ -790,7 +1076,8 @@ module.exports = cds.service.impl(async function () {
                 contatoId: String(funcionario.BusinessPartnerID == null
                     ? "" : funcionario.BusinessPartnerID).trim(),
                 clientes: [],
-                origem: "funcionario"
+                origem: "funcionario",
+                basis: ehBasis
             };
         }
 
@@ -863,7 +1150,8 @@ module.exports = cds.service.impl(async function () {
 
         clientes.sort((a, b) => a.descricao.localeCompare(b.descricao, "pt-BR"));
 
-        return { nome, contatoId, clientes, origem: "contato" };
+        // basis e sempre false no contato: quem abre chamado nao opera o SAP.
+        return { nome, contatoId, clientes, origem: "contato", basis: false };
     });
 
     // Le os bytes de UM anexo, so no clique de download. Nao valida se o anexo pertence a um
@@ -997,118 +1285,330 @@ module.exports = cds.service.impl(async function () {
     // chamado pela ultima vez, nunca mensagem nenhuma - as mensagens continuam vindo do C4C
     // (ServiceRequestTextCollection/InteracoesDoChamado) toda vez que o chat e aberto.
     this.on("ChamadosComMensagemNova", async (req) => {
-        const emailInformado = (req.data.email || "").trim();
-        const emailLogado = (req.user && req.user.attr && req.user.attr.email) || "";
-        const email = emailInformado || emailLogado || EMAIL_CONTATO_DEV;
+        const sEmail = resolverEmailDoChat(req);
+
+        // Sem identidade a consulta seria por usuario = "": nenhuma linha volta, todo chamado com
+        // conversa cai no ramo "nunca visualizado" e o sino acende em TUDO pra TODOS - o mesmo
+        // sintoma que esta rodada foi corrigir, so que por outro caminho. Falha fechada: nao
+        // notificar erra menos que notificar tudo, e MarcarChatVisualizado nem conseguiria apagar.
+        if (!sEmail) {
+            LOG.warn("Sem identidade para o badge de chat (JWT sem attr.email e sem e-mail no "
+                + "request): notificacao desligada nesta chamada.");
+            return { ticketIds: [], chamados: [] };
+        }
 
         const aChamados = Array.isArray(req.data.chamados) ? req.data.chamados : [];
         if (!aChamados.length) {
-            return { ticketIds: [] };
+            return { ticketIds: [], chamados: [] };
         }
 
-        const aVisualizacoes = await dbService.run(
-            SELECT.from(CHAT_VISUALIZACOES).where({ usuario: email })
-        );
-        const mVisualizadoEm = new Map(aVisualizacoes.map((linha) => [linha.ticketId, linha.visualizadoEm]));
+        // O HANA deste plano free desliga sozinho todos os dias: sem o try/catch, o poll de 60 s
+        // do frontend viraria uma sequencia de 500 mudos. Degradar = "ninguem tem mensagem nova".
+        let mVisualizadoEm;
+        let bJaSemeado;
+        let iPisoBadge;
+        try {
+            const aVisualizacoes = await dbService.run(
+                SELECT.from(CHAT_VISUALIZACOES).where({ usuario: sEmail })
+            );
+            mVisualizadoEm = new Map(aVisualizacoes.map((oLinha) => [
+                String(oLinha.ticketId || "").trim(),
+                paraMs(oLinha.visualizadoEm)
+            ]));
 
-        // Nunca visualizado = notifica direto, sem gastar chamada nenhuma no C4C pra ele.
-        const aTicketIds = aChamados
-            .filter((oChamado) => !mVisualizadoEm.has(String(oChamado.ticketId || "")))
-            .map((oChamado) => String(oChamado.ticketId || ""))
-            .filter(Boolean);
+            // O marco nao e chamado nenhum: sai do mapa para nunca ser comparado com um ticketId
+            // real. A EXISTENCIA dele diz se o usuario ja foi semeado; a data e o piso do badge.
+            bJaSemeado = mVisualizadoEm.has(TICKET_ID_MARCO_SEMEADURA);
+            iPisoBadge = mVisualizadoEm.get(TICKET_ID_MARCO_SEMEADURA) ?? null;
+            mVisualizadoEm.delete(TICKET_ID_MARCO_SEMEADURA);
+        } catch (erro) {
+            LOG.warn(`Falha ao ler ChatVisualizacoes de ${sEmail}: ${erro.message}`);
+            return { ticketIds: [], chamados: [] };
+        }
 
-        // Ja visualizados: um por um (nao em lote). Tentei um filtro OR de ParentObjectID pra
-        // checar todos numa chamada so, mas MEDIDO contra o tenant que o parser do C4C e
-        // instavel com OR de 2+ valores: as vezes devolve VAZIO sem erro (silenciosamente
-        // ignorando candidatos validos - pior que lento, e ERRADO, o mesmo tipo de bug que
-        // reverteu a tentativa anterior) e as vezes rejeita com "Ungultigen Token", dependendo
-        // do valor. So a checagem POR CHAMADO (uma unica igualdade no filtro, sem OR nenhum) se
-        // mostrou estavel em todos os testes. Por isso nota e interacao sao checadas juntas, uma
-        // chamada de cada por candidato, em paralelo com o mesmo limite de concorrencia que
-        // ChamadosSap ja usa pra nao martelar o C4C.
-        const aCandidatos = aChamados
-            .filter((oChamado) => mVisualizadoEm.has(String(oChamado.ticketId || "")))
+        // Todo chamado com objectID e candidato. O atalho antigo ("nunca visualizado = notifica
+        // direto, sem gastar chamada") era o bug do primeiro acesso: chamado recem-aberto, que so
+        // tem a descricao (TypeCode 10004) e ZERO mensagem, acendia badge pra todo mundo. Agora
+        // os dois ramos respondem a MESMA pergunta com a MESMA consulta: qual a data da ultima
+        // mensagem. Chamado sem objectID fica de fora (nao da pra consultar) e nem entra na lista.
+        const aElegiveis = aChamados
             .map((oChamado) => ({
-                ticketId: String(oChamado.ticketId || ""),
-                objectID: String(oChamado.objectID || ""),
-                visualizadoEm: mVisualizadoEm.get(String(oChamado.ticketId || ""))
+                ticketId: String(oChamado.ticketId || "").trim(),
+                objectID: String(oChamado.objectID || "").trim()
             }))
-            .filter((oCand) => oCand.objectID);
+            .filter((oCand) => oCand.ticketId && oCand.objectID);
+
+        // Corte defensivo na ordem recebida (o frontend manda do mais recente): cliente
+        // desatualizado nao estoura o tenant, e o LOG.warn evita truncamento silencioso.
+        if (aElegiveis.length > MAXIMO_CHAMADOS_POLL_NOTIFICACOES) {
+            LOG.warn(`Poll de notificacoes recebeu ${aElegiveis.length} chamados de ${sEmail}, `
+                + `acima do teto ${MAXIMO_CHAMADOS_POLL_NOTIFICACOES}: lote truncado. `
+                + "Conferir o corte do frontend (MAX_CHAMADOS_POLL_NOTIFICACOES).");
+        }
+
+        const aCandidatos = aElegiveis.slice(0, MAXIMO_CHAMADOS_POLL_NOTIFICACOES);
+
+        // Sem o marco = primeiro acesso do usuario: grava o piso e nao notifica nada nesta rodada,
+        // para o sino nao saltar de zero para a lista inteira (as linhas antigas ficaram orfas
+        // quando a chave passou a ser o e-mail real). E POR USUARIO, uma vez so: por chamado,
+        // resposta chegada com o app fechado nunca mais viraria badge.
+        // Grava UMA linha (o marco) e nao uma por chamado do lote de proposito: o piso vale para
+        // TODOS os chamados do usuario, inclusive os que nao couberam nos 30 desta rodada - com
+        // semeadura por lote, os chamados 31+ acenderiam todos juntos no dia em que entrassem.
+        // visualizadoEm vai EXPLICITO em vez de depender de @cds.on.insert: e o mesmo instante
+        // que a anotacao gravaria, e linha com data nula seria lida como "nunca visualizado", que
+        // e o pior default possivel aqui.
+        if (!bJaSemeado) {
+            let bSemeadoAgora = false;
+
+            try {
+                await dbService.run(UPSERT.into(CHAT_VISUALIZACOES).entries({
+                    usuario: sEmail,
+                    ticketId: TICKET_ID_MARCO_SEMEADURA,
+                    visualizadoEm: new Date().toISOString()
+                }));
+                bSemeadoAgora = true;
+                LOG.info(`Primeiro acesso do badge de chat de ${sEmail}: piso gravado, `
+                    + "sem notificacao nesta rodada.");
+            } catch (erro) {
+                // NAO silencia quando a gravacao falha: sem o marco no banco, a proxima rodada
+                // cairia aqui de novo, e uma falha DETERMINISTICA deixaria o sino desligado para
+                // sempre, sem sintoma nenhum na tela. Segue para a avaliacao normal, que erra
+                // para o lado visivel (notifica demais uma vez) e o usuario apaga abrindo o chat.
+                LOG.error(`Falha ao semear o marco de ChatVisualizacoes de ${sEmail}: `
+                    + `${erro.message}. Notificacao segue pelo caminho normal nesta rodada.`);
+            }
+
+            // ultimaMensagemEm nulo e ESCOLHA: 2 GETs por chamado para uma data que nao muda o
+            // badge ("nao notifica" por definicao) seria o pior custo - a rodada seguinte a traz.
+            if (bSemeadoAgora) {
+                return {
+                    ticketIds: [],
+                    chamados: aCandidatos.map((oCand) => ({
+                        ticketId: oCand.ticketId,
+                        mensagemNova: false,
+                        ultimaMensagemEm: null
+                    }))
+                };
+            }
+        }
+
+        const aResultado = [];
 
         if (aCandidatos.length) {
             const sFiltroTypeCode = TYPE_CODES_MENSAGEM_CHAT
                 .map((sTypeCode) => `TypeCode eq '${sTypeCode}'`)
                 .join(" or ");
 
+            // Reserva do REDE_SEGURANCA_LIGADA: a consulta LEGADA (filtro de data, sem $orderby)
+            // so responde "existe algo depois de X", nunca "quando foi" - por isso ela nao entra
+            // no caminho normal, so confirma o vazio antes de concluir "sem mensagem nenhuma".
+            const temNotaDepoisDe = async (sObjectID, iVisualizadoEm, sTicketId) => {
+                try {
+                    const sData = new Date(iVisualizadoEm).toISOString();
+                    const aNotas = linhasDaResposta(await ticketService.send({
+                        method: "GET",
+                        path: "/ServiceRequestTextCollectionCollection?$filter="
+                            + encodeURIComponent(`(${sFiltroTypeCode}) and ParentObjectID eq '${sObjectID}' `
+                                + `and CreatedOn gt datetimeoffset'${sData}'`)
+                            + "&$top=1&$select=ParentObjectID&$format=json",
+                        headers: { Accept: "application/json" }
+                    }));
+                    return aNotas.length > 0;
+                } catch (erro) {
+                    LOG.warn(`Falha na checagem legada do chamado ${sTicketId}: ${erro.message}`);
+                    return false;
+                }
+            };
+
+            // Cache por objectID: a data nao depende de quem pergunta, entao N usuarios com a
+            // tela aberta pagam uma consulta so por janela em vez de N.
+            const ultimaMensagemDoChamado = async (sChaveCache, sObjectID, sTicketId) => {
+                const oEmCache = lerCacheUltimaMensagem(sChaveCache);
+                if (oEmCache) return oEmCache.iUltima;
+
+                let bConsultaCompleta = true;
+
+                // Nota: TypeCode 10007/10008 (mesmo par que o app usa pra enviar mensagem).
+                // A consulta agora e ORDENADA por CreatedOn desc + $top=1, sem filtro de
+                // data: e o unico jeito de saber QUANDO foi a ultima mensagem (a lista de
+                // chats mostra essa data no lugar da abertura). Sem $orderby o C4C devolve
+                // uma ordem arbitraria - MEDIDO: num chamado de 4 notas, $top=1 sozinho
+                // trouxe a TERCEIRA. O $orderby foi validado 20/20 vezes neste tenant.
+                let iNota = null;
+                try {
+                    const aNotas = linhasDaResposta(await ticketService.send({
+                        method: "GET",
+                        path: "/ServiceRequestTextCollectionCollection?$filter="
+                            + encodeURIComponent(`(${sFiltroTypeCode}) and ParentObjectID eq '${sObjectID}'`)
+                            + "&$orderby=" + encodeURIComponent("CreatedOn desc")
+                            + "&$top=1&$select=CreatedOn&$format=json",
+                        headers: { Accept: "application/json" }
+                    }));
+                    if (aNotas.length) iNota = paraMs(aNotas[0].CreatedOn);
+                } catch (erro) {
+                    // Falha ISOLADA: so este chamado perde a fonte "nota" nesta rodada, os
+                    // demais e o resultado geral seguem intactos.
+                    bConsultaCompleta = false;
+                    LOG.warn(`Falha ao ler a ultima nota do chamado ${sTicketId}: ${erro.message}`);
+                }
+
+                // Interacao: mensagem digitada direto no Sales Cloud, que NAO vira nota.
+                // Consultada SEMPRE, nunca so quando a nota falta: MEDIDO que em 5 de 8
+                // conversas com as duas fontes a interacao era MAIS NOVA que a nota (num caso
+                // 2 dias depois). Parar na nota daria data errada e sino apagado.
+                let iInteracao = null;
+                try {
+                    const aInteracoes = linhasDaResposta(await interactionService.send({
+                        method: "GET",
+                        path: `/ServiceRequestInteractionTicketCollection('${sObjectID}')`
+                            + "/ServiceRequestInteractionInteractions?$orderby="
+                            + encodeURIComponent("CreationDateTime desc")
+                            + "&$top=" + TOPO_INTERACOES_COM_TEXTO
+                            + "&$select=CreationDateTime,Text&$format=json",
+                        headers: { Accept: "application/json" }
+                    }));
+
+                    // Text vazio NAO conta: o chat descarta essas linhas nos dois lados
+                    // (InteracoesDoChamado aqui e _mapearInteracaoParaChat no frontend), e
+                    // MEDIDO no tenant que a interacao MAIS NOVA de um chamado real tinha so
+                    // assunto. Contar essa linha acenderia o sino e mandaria o usuario para
+                    // uma conversa onde nao ha nada de novo - o mesmo tipo de badge falso que
+                    // esta rodada foi corrigir. Por isso o $top pega algumas e fica na
+                    // primeira COM texto, ja que a lista vem ordenada da mais nova.
+                    const oInteracaoComTexto = aInteracoes
+                        .find((oLinha) => String(oLinha.Text || "").trim());
+
+                    if (oInteracaoComTexto) {
+                        iInteracao = paraMs(oInteracaoComTexto.CreationDateTime);
+                    }
+                } catch (erro) {
+                    bConsultaCompleta = false;
+                    LOG.warn(`Falha ao ler a ultima interacao do chamado ${sTicketId}: ${erro.message}`);
+                }
+
+                const iUltima = maiorOuNull(iNota, iInteracao);
+
+                // Resultado PARCIAL nunca entra no cache: uma instabilidade de 1 s viraria
+                // "sem mensagem" por 30 s, apagando o badge de todos os usuarios.
+                if (bConsultaCompleta) {
+                    gravarCacheUltimaMensagem(sChaveCache, iUltima);
+                }
+
+                return iUltima;
+            };
+
+            limparCacheUltimaMensagem();
+
             let iProximo = 0;
 
+            // Um chamado de cada vez (nunca em lote): tentei um filtro OR de ParentObjectID pra
+            // checar todos numa chamada so, mas MEDIDO contra o tenant que o parser do C4C e
+            // instavel com OR de 2+ valores - as vezes devolve VAZIO sem erro (silenciosamente
+            // ignorando candidatos validos, o mesmo tipo de bug que reverteu a tentativa
+            // anterior) e as vezes rejeita com "Ungultigen Token". So a checagem POR CHAMADO
+            // (uma unica igualdade no filtro, sem OR nenhum) se mostrou estavel. O paralelismo
+            // usa o mesmo teto de 429 do C4C que as demais varreduras.
             await emParalelo(LOTES_SIMULTANEOS_CHAMADOS_SAP, aCandidatos.length, async () => {
                 while (iProximo < aCandidatos.length) {
                     const oCand = aCandidatos[iProximo];
                     iProximo += 1;
 
                     const sObjectID = oCand.objectID.replace(/'/g, "''");
-                    const sData = new Date(oCand.visualizadoEm).toISOString();
+                    const bTemLinha = mVisualizadoEm.has(oCand.ticketId);
+                    const iVisualizadoEm = mVisualizadoEm.get(oCand.ticketId) ?? null;
 
-                    // Nota: TypeCode 10007/10008 (mesmo par que o app usa pra enviar mensagem).
-                    let bNotaNova = false;
-                    try {
-                        const aNotas = linhasDaResposta(await ticketService.send({
-                            method: "GET",
-                            path: "/ServiceRequestTextCollectionCollection?$filter="
-                                + encodeURIComponent(`(${sFiltroTypeCode}) and ParentObjectID eq '${sObjectID}' `
-                                    + `and CreatedOn gt datetimeoffset'${sData}'`)
-                                + "&$top=1&$select=ParentObjectID&$format=json",
-                            headers: { Accept: "application/json" }
-                        }));
-                        bNotaNova = aNotas.length > 0;
-                    } catch (erro) {
-                        LOG.warn(`Falha ao checar nota nova do chamado ${oCand.ticketId}: ${erro.message}`);
-                    }
+                    // A decisao continua POR USUARIO aqui embaixo: o cache guarda a data, nunca
+                    // o mensagemNova, que depende do visualizadoEm de cada um.
+                    const iUltima = await ultimaMensagemDoChamado(
+                        oCand.objectID, sObjectID, oCand.ticketId
+                    );
 
-                    if (bNotaNova) {
-                        aTicketIds.push(oCand.ticketId);
-                        continue;
-                    }
+                    let bMensagemNova;
+                    let sUltimaMensagemEm;
 
-                    // Interacao: mensagem digitada direto no Sales Cloud, que NAO vira nota - so
-                    // checada quando nao ha nota nova, pra nao gastar a segunda chamada a toa.
-                    try {
-                        const aInteracoesNovas = linhasDaResposta(await interactionService.send({
-                            method: "GET",
-                            path: `/ServiceRequestInteractionTicketCollection('${sObjectID}')`
-                                + "/ServiceRequestInteractionInteractions?$filter="
-                                + encodeURIComponent(`CreationDateTime gt datetimeoffset'${sData}'`)
-                                + "&$top=1&$select=ObjectID&$format=json",
-                            headers: { Accept: "application/json" }
-                        }));
-
-                        if (aInteracoesNovas.length) {
-                            aTicketIds.push(oCand.ticketId);
+                    if (iUltima !== null) {
+                        if (iVisualizadoEm !== null) {
+                            bMensagemNova = iUltima > iVisualizadoEm;
+                        } else if (bTemLinha) {
+                            // Linha existe mas sem data (gravacao antiga ou interrompida): nao ha
+                            // com o que comparar. Fail closed, igual ao resto do handler - ler
+                            // isso como "nunca visualizado" acenderia a lista toda de uma vez.
+                            bMensagemNova = false;
+                        } else if (iPisoBadge !== null) {
+                            // Chamado SEM linha propria: compara com o piso da semeadura, nao com
+                            // "nunca visualizado". E o que faz o silenciamento do primeiro acesso
+                            // valer para os chamados que nao couberam no primeiro lote, sem calar
+                            // mensagem que chegou DEPOIS do piso (essa continua acendendo).
+                            bMensagemNova = iUltima > iPisoBadge;
+                        } else {
+                            // Sem piso: usuario cujo marco nao pode ser gravado nesta rodada.
+                            // Comportamento anterior a esta rodada (notifica), de proposito - ver
+                            // o LOG.error da semeadura.
+                            bMensagemNova = true;
                         }
-                    } catch (erro) {
-                        // Falha ISOLADA: so este chamado fica sem checagem de interacao nesta
-                        // rodada, os demais e o resultado geral seguem intactos.
-                        LOG.warn(`Falha ao checar interacao nova do chamado ${oCand.ticketId}: ${erro.message}`);
+
+                        sUltimaMensagemEm = new Date(iUltima).toISOString();
+                    } else {
+                        // Sem mensagem nenhuma: chamado recem-aberto NAO notifica.
+                        bMensagemNova = false;
+                        sUltimaMensagemEm = null;
+
+                        // A rede de seguranca so existe porque "vazio" tambem e o sintoma do
+                        // parser instavel. Sem visualizadoEm nao ha consulta legada possivel (ela
+                        // precisa da data), e esse e o caso da maioria dos chamados - por isso a
+                        // reserva quase nunca roda. Quando roda, sabe-se SE ha mensagem nova, mas
+                        // nao QUANDO: unico caso em que mensagemNova=true com data nula.
+                        if (REDE_SEGURANCA_LIGADA && iVisualizadoEm !== null) {
+                            bMensagemNova = await temNotaDepoisDe(sObjectID, iVisualizadoEm, oCand.ticketId);
+                        }
                     }
+
+                    aResultado.push({
+                        ticketId: oCand.ticketId,
+                        mensagemNova: bMensagemNova,
+                        ultimaMensagemEm: sUltimaMensagemEm
+                    });
                 }
             });
         }
 
-        return { ticketIds: aTicketIds };
+        // ticketIds e SEMPRE derivado de chamados (nunca calculado por outro caminho): e o unico
+        // campo que a versao anterior do frontend le, e os dois lados precisam poder subir em
+        // deploys separados sem divergir.
+        return {
+            ticketIds: aResultado.filter((oItem) => oItem.mensagemNova).map((oItem) => oItem.ticketId),
+            chamados: aResultado
+        };
     });
 
     this.on("MarcarChatVisualizado", async (req) => {
-        const emailInformado = (req.data.email || "").trim();
-        const emailLogado = (req.user && req.user.attr && req.user.attr.email) || "";
-        const email = emailInformado || emailLogado || EMAIL_CONTATO_DEV;
+        // Mesmo helper da leitura: a chave (usuario, ticketId) so fecha se os dois lados
+        // normalizarem igual - gravar "Fulano@x" e ler "fulano@x" criaria duas linhas.
+        const email = resolverEmailDoChat(req);
         const ticketId = String(req.data.ticketId || "").trim();
 
-        if (!email || !ticketId) {
+        if (!ticketId) {
             return req.reject(400, "ticketId é obrigatório.");
         }
 
-        await dbService.run(UPSERT.into(CHAT_VISUALIZACOES).entries({ usuario: email, ticketId }));
+        // Identidade ausente e caso SEPARADO do ticketId: rejeitar com a mensagem do ticketId
+        // mandava o suporte investigar o frontend quando o furo estava no xsuaa. E devolver false
+        // em vez de 400 mantem o padrao "marcar visualizado e acessorio, nao derruba o envio".
+        if (!email) {
+            LOG.warn(`Sem identidade para marcar o chat ${ticketId} como visualizado `
+                + "(JWT sem attr.email e sem e-mail no request).");
+            return false;
+        }
+
+        // Marcar visualizado e acessorio: se o HANA free estiver dormindo, o badge continua aceso
+        // (custo baixo) em vez de o frontend tomar 500 no meio do envio de uma mensagem.
+        try {
+            await dbService.run(UPSERT.into(CHAT_VISUALIZACOES).entries({ usuario: email, ticketId }));
+        } catch (erro) {
+            LOG.warn(`Falha ao gravar ChatVisualizacoes de ${email} / ${ticketId}: ${erro.message}`);
+            return false;
+        }
 
         return true;
     });
@@ -1384,6 +1884,52 @@ module.exports = cds.service.impl(async function () {
         }
 
         return contatoSapComoResposta(varredura.pessoa);
+    });
+
+    // S-Users do cliente do chamado (z_customer_number_KUT, resolvido por ClienteSap) para a
+    // ajuda de valor do dialogo de abertura.
+    this.on("ContatosSap", async (req) => {
+        const customerNumber = String(req.data.customerNumber || "").trim();
+
+        // Sem fallback para CUSTOMER_NUMBER_SAP, ao contrario de AmbientesSap: aqui o customer
+        // errado vazaria os contatos de outro cliente na tela.
+        if (!customerNumber) {
+            return req.reject(400,
+                "Informe o numero do cliente para listar os S-Users do SAP Cloud ALM.");
+        }
+
+        let varredura;
+        try {
+            varredura = await varrerTodosContatosSap(await conectarCalmItsm(), customerNumber);
+        } catch (erro) {
+            LOG.warn(`Falha ao ler contatos do SAP Cloud ALM para o customer ${customerNumber}: `
+                + `${erro.message}`);
+            return req.reject(502,
+                `Nao foi possivel consultar os contatos do SAP Cloud ALM: ${erro.message}`);
+        }
+
+        // Ordem estavel: a ALM nao a garante e a lista pularia de posicao entre aberturas.
+        const contatos = varredura.pessoas
+            .map((pessoa) => contatoSapComoResposta(pessoa))
+            .sort((a, b) => a.nome.localeCompare(b.nome) || a.sUser.localeCompare(b.sUser));
+
+        if (!contatos.length) {
+            // Cliente sem S-User cadastrado e cadastro, nao falha: a tela recebe lista vazia.
+            LOG.warn(`SAP Cloud ALM nao devolveu contatos para o customer ${customerNumber}.`);
+        }
+
+        // Lista incompleta sai com 200 e a tela nao tem como saber: sem este log o usuario que nao
+        // acha o contato dele parece cadastro faltando.
+        if (varredura.lidos < varredura.total) {
+            LOG.warn(`Contatos lidos parcialmente (${varredura.lidos}/${varredura.total}) `
+                + `no customer ${customerNumber}; a lista da tela esta truncada.`);
+        }
+
+        return {
+            total: varredura.total || varredura.lidos,
+            exibidos: contatos.length,
+            contatos
+        };
     });
 
     // Numero do cliente da ALM a partir do BuyerPartyID do chamado. Aditivo: falha tecnica ou

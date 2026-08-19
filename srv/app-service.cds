@@ -69,6 +69,9 @@ service IntegrationService {
     // quando não há contato). Vazio = nenhuma das duas achou; o handler não rejeita nesse
     // caso, quem bloqueia a tela continua sendo o frontend.
     origem    : String;
+    // true so para 'funcionario' atribuido a BASISID/AMSBASIS: fora dessas unidades a UI
+    // esconde os controles do SAP e a Prioridade, entao contato e falha na consulta = false.
+    basis     : Boolean;
   }
 
   // Não é projection: o achatamento/dedupe das contas acontece no handler, não no modelo.
@@ -110,15 +113,32 @@ service IntegrationService {
     objectID : String;
   }
 
+  // Espelho por chamado do que o sino precisa: alem do "tem mensagem nova", a DATA da ultima
+  // mensagem da conversa, que a lista de chats mostra no lugar da data de abertura.
+  // ultimaMensagemEm e String (nao Timestamp) pelo mesmo motivo de InteracaoChamado.quando: a
+  // data vem crua do C4C e quem formata e o frontend (_paraIsoLocal), sem coercao do CAP no meio.
+  type ChamadoMensagemNova {
+    ticketId         : String;
+    mensagemNova     : Boolean;
+    ultimaMensagemEm : String;
+  }
+
   // "action", nao "function": um parametro Collection(ComplexType) nao da pra codificar numa URL
   // GET (o jeito que function exige no OData V4) - action manda o corpo em POST, que suporta
   // isso. Sem efeito colateral (so leitura), mas o formato do parametro obriga essa escolha.
-  // So NOTAS (ServiceRequestTextCollection) - interacoes nao tem campo de volta pro chamado na
-  // entidade plana (ServiceRequestInteractionInteractionsCollection), entao nao da pra checar em
-  // lote. Devolve so os ticketIds com nota nova (TypeCode 10007/10008) desde a ultima
-  // visualizacao guardada em ChatVisualizacoes (db/schema.cds), ou nunca visualizados.
+  // Checa DUAS fontes por chamado - notas (TypeCode 10007/10008) e interacoes digitadas direto
+  // no Sales Cloud - e responde a mesma pergunta pros dois casos (nunca visualizado ou nao):
+  // qual e a data da ULTIMA mensagem, comparada com a visualizacao guardada em ChatVisualizacoes
+  // (db/schema.cds). Chamado sem mensagem nenhuma (so a descricao 10004) NAO notifica.
+  // "chamados" e o retorno novo, com a data por chamado; "ticketIds" continua existindo com o
+  // mesmo significado de antes pra versao anterior do frontend nao quebrar em deploy separado.
+  // O lote tem teto proprio no handler (cliente nao dita o custo do C4C) e o primeiro acesso de
+  // cada usuario e semeado como visualizado: responde tudo false em vez de acender a lista toda.
+  // A semeadura grava UMA linha-marco em ChatVisualizacoes (ticketId reservado "*", que nao e
+  // chamado nenhum) com o instante em que o badge passou a valer; chamado sem linha propria e
+  // comparado com esse piso, e nao tratado como "nunca visualizado".
   action ChamadosComMensagemNova(email : String, chamados : array of ChamadoParaChecar)
-    returns { ticketIds : array of String };
+    returns { ticketIds : array of String; chamados : array of ChamadoMensagemNova };
 
   action MarcarChatVisualizado(email : String, ticketId : String) returns Boolean;
 
@@ -194,6 +214,14 @@ service IntegrationService {
   // ContactID evita o homonimo do nome; nome so como fallback de chamado antigo sem o ID.
   // Sem customerNumber: o S-User do requisitante e sempre buscado no customer da ALM.
   function ContatoSapDoRequisitante(contatoId : String, nome : String) returns ContatoSUser;
+
+  // customerNumber obrigatorio: vazio listaria os S-Users do customer da Megawork
+  // (CUSTOMER_NUMBER_SAP) e a tela mostraria contato de outro cliente.
+  function ContatosSap(customerNumber : String) returns {
+    total    : Integer;
+    exibidos : Integer;
+    contatos : array of ContatoSUser;
+  };
 
   // O z_customer_number_KUT é campo custom fora de qualquer EDMX importado e vive na
   // BusinessPartnerCollection, com $expand=CorporateAccount porque o tenant às vezes só o
