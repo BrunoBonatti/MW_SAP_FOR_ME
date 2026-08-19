@@ -10,11 +10,11 @@
     overflow: visible;
 }
 
-/* Etapa "Assunto" do wizard de criar chamado: os cartoes ficam centralizados com largura
-   maxima em vez de esticar borda a borda da tela, para nao ficarem largos demais em monitores
-   grandes. */
+/* Etapa "Assunto" do wizard de criar chamado: o grid (cartao Assunto+Descricao e cartao Anexo
+   lado a lado) fica centralizado com largura maxima em vez de esticar borda a borda da tela,
+   para nao ficar largo demais em monitores grandes. */
 .mwCriarChamadoConteudo {
-    max-width: 60rem;
+    max-width: 75rem;
     margin: 0 auto;
 }
 
@@ -22,6 +22,36 @@
     box-sizing: border-box;
     padding-bottom: 0.5rem;
     border-bottom: 0.0625rem solid var(--sapGroup_ContentBorderColor, #d9d9d9);
+}
+
+/* Linha do rotulo "eyebrow" da secao de Descricao dentro do cartao Classificacao (Criar
+   Chamado): a regua fica embutida na linha inteira (rotulo + asterisco), nao so no texto do
+   rotulo - senao o "*" ficaria fora da regua. */
+.mwCriarChamadoEyebrowLinha {
+    width: 100%;
+    box-sizing: border-box;
+    gap: 0.25rem;
+    padding-bottom: 0.7rem;
+    margin-bottom: 0.7rem;
+    border-bottom: 0.0625rem solid var(--sapGroup_ContentBorderColor, #d9d9d9);
+}
+
+/* Rotulo "eyebrow": pequeno, maiusculo, espacado, na cor de marca. */
+.mwCriarChamadoEyebrow {
+    font-size: 0.68rem;
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--sapBrandColor, #0a6ed1);
+}
+
+/* Asterisco de obrigatorio ao lado do rotulo "eyebrow": Text nao tem o required="true" que o
+   Label ganha de graca, entao o "*" e manual aqui, na mesma cor negativa do tema usada pelo
+   Label required="true" do campo Titulo. */
+.mwCriarChamadoObrigatorio {
+    font-size: 0.75rem;
+    font-weight: 700;
+    color: var(--sapNegativeTextColor, #b00020);
 }
 
 /* Sem moldura propria: quem molda a tabela e o cartao. */
