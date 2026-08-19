@@ -1,1 +1,0 @@
-using IntegrationService as service from '../../srv/app-service';

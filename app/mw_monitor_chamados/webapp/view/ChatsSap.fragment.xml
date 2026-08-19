@@ -100,6 +100,23 @@
                             width="100%"
                             alignItems="Baseline"
                             justifyContent="SpaceBetween">
+                            <!-- Icone estatico (nao initials/cor de requisitante como em
+                                 Chats.fragment.xml): um caso SAP nao tem uma pessoa associada, so
+                                 numero do caso e assunto (ver _espelharCasosSapNoChat). alignSelf
+                                 Center pelo mesmo motivo do Avatar da outra tela: a HBox e
+                                 Baseline para o par nome/data alinhar, e o Avatar nao tem baseline
+                                 de texto. -->
+                            <Avatar
+                                src="sap-icon://sap-logo-shape"
+                                displaySize="XS"
+                                class="sapUiTinyMarginEnd">
+                                <layoutData>
+                                    <FlexItemData
+                                        growFactor="0"
+                                        shrinkFactor="0"
+                                        alignSelf="Center"/>
+                                </layoutData>
+                            </Avatar>
                             <!-- minWidth="0" e o que permite o nome e a ultima mensagem truncarem
                                  em "..." em vez de estourar a largura da coluna. -->
                             <VBox class="mwChatsItemTexto">
@@ -137,7 +154,8 @@
                                     state="Information"
                                     inverted="true"
                                     visible="{= ${view>naoLidas} &gt; 0 }"
-                                    tooltip="{i18n>chatsNaoLidasTooltip}"/>
+                                    tooltip="{i18n>chatsNaoLidasTooltip}"
+                                    class="mwChatsBadgeNaoLidas"/>
                             </VBox>
                         </HBox>
                     </CustomListItem>
@@ -179,6 +197,20 @@
                     alignItems="Center"
                     justifyContent="SpaceBetween"
                     class="mwChatsCabecalho">
+                    <!-- Mesmo icone estatico da linha da lista (ver comentario la em cima): sem
+                         requisitante para o caso SAP, so mantem o par avatar/texto do cabecalho
+                         alinhado com o de Chats.fragment.xml. -->
+                    <Avatar
+                        id="chatsCabecalhoAvatarSap"
+                        src="sap-icon://sap-logo-shape"
+                        displaySize="S"
+                        class="sapUiSmallMarginEnd">
+                        <layoutData>
+                            <FlexItemData
+                                growFactor="0"
+                                shrinkFactor="0"/>
+                        </layoutData>
+                    </Avatar>
                     <VBox
                         id="chatsCabecalhoTextoBoxSap"
                         class="mwChatsItemTexto">
@@ -212,6 +244,16 @@
                             type="Transparent"
                             icon="sap-icon://action-settings"
                             press=".onChatAcoes"/>
+                        <!-- Mesmo padrao de Chats.fragment.xml (chatsBotaoFechar/onChatFechar):
+                             volta ao estado vazio e zera comentariosCarregados da linha, entao
+                             reabrir o MESMO caso busca os comentarios de novo na ALM em vez de
+                             servir o cache. -->
+                        <Button
+                            id="chatsBotaoFecharSap"
+                            tooltip="{i18n>chatsFecharTooltip}"
+                            type="Transparent"
+                            icon="sap-icon://decline"
+                            press=".onChatFecharSap"/>
                     </HBox>
                 </HBox>
                 <!-- Unico scroll da tela: cabecalho e barra de envio ficam fixos. -->

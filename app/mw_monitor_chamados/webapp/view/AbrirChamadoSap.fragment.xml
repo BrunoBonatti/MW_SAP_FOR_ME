@@ -86,6 +86,72 @@
                         press=".onFecharAmbientesSap" />
                 </beginButton>
             </Dialog>
+            <Dialog
+                id="dialogSUsersSap"
+                title="{i18n>abrirChamadoSapSUsersTitulo}"
+                contentWidth="42rem"
+                contentHeight="28rem"
+                resizable="true"
+                draggable="true"
+                busy="{sUsersSap>/carregando}"
+                busyIndicatorDelay="0">
+                <subHeader>
+                    <OverflowToolbar>
+                        <SearchField
+                            placeholder="{i18n>abrirChamadoSapSUsersBuscaPlaceholder}"
+                            value="{sUsersSap>/busca}"
+                            search=".onBuscarSUsersSap"
+                            width="100%" />
+                    </OverflowToolbar>
+                </subHeader>
+                <content>
+                    <Table
+                        id="tabelaSUsersSap"
+                        items="{sUsersSap>/contatos}"
+                        growing="true"
+                        growingThreshold="50"
+                        sticky="ColumnHeaders">
+                        <columns>
+                            <Column width="10rem">
+                                <Text text="{i18n>abrirChamadoSapSUsersColSUser}" />
+                            </Column>
+                            <Column>
+                                <Text text="{i18n>abrirChamadoSapSUsersColNome}" />
+                            </Column>
+                            <Column
+                                minScreenWidth="Tablet"
+                                demandPopin="true"
+                                popinDisplay="Inline">
+                                <Text text="{i18n>abrirChamadoSapSUsersColEmail}" />
+                            </Column>
+                        </columns>
+                        <items>
+                            <ColumnListItem
+                                type="Active"
+                                press=".onSelecionarSUserSap">
+                                <cells>
+                                    <Text text="{sUsersSap>sUser}" />
+                                    <Text text="{sUsersSap>nome}" />
+                                    <Text text="{sUsersSap>email}" />
+                                </cells>
+                            </ColumnListItem>
+                        </items>
+                        <noData>
+                            <IllustratedMessage
+                                illustrationType="sapIllus-NoSearchResults"
+                                illustrationSize="Spot"
+                                enableDefaultTitleAndDescription="false"
+                                title="{i18n>abrirChamadoSapSUsersVazioTitulo}"
+                                description="{i18n>abrirChamadoSapSUsersVazioDescricao}" />
+                        </noData>
+                    </Table>
+                </content>
+                <beginButton>
+                    <Button
+                        text="{i18n>abrirChamadoSapSUsersFechar}"
+                        press=".onFecharSUsersSap" />
+                </beginButton>
+            </Dialog>
         </dependents>
         <content>
             <form:SimpleForm
@@ -136,33 +202,51 @@
                     </ObjectStatus>
                 </HBox>
 
-                <!-- Somente leitura: editar criaria divergencia com o cadastro do SAP Cloud ALM. -->
+                <!-- Sem preenchimento automatico: o S-User do cliente e escolha do usuario, e
+                     valueHelpOnly mantem a escolha presa a lista de contatos da SAP Cloud ALM. -->
                 <Label
                     text="{i18n>abrirChamadoSapReporter}"
+                    required="true"
                     labelFor="inputReporterChamadoSap" />
                 <HBox width="100%" alignItems="Center">
                     <Input
                         id="inputReporterChamadoSap"
                         value="{chamadoSap>/sUser}"
-                        placeholder="{i18n>abrirChamadoSapSUserVazio}"
-                        editable="false"
-                        busy="{chamadoSap>/sUserCarregando}"
+                        placeholder="{i18n>abrirChamadoSapSUserSelecionar}"
+                        editable="true"
+                        valueHelpOnly="true"
+                        showValueHelp="true"
+                        valueHelpRequest=".onAbrirSUsersSap"
+                        busy="{chamadoSap>/sUsersAbrindo}"
                         busyIndicatorDelay="0"
                         width="12rem">
                         <layoutData>
                             <FlexItemData shrinkFactor="0" growFactor="0" />
                         </layoutData>
                     </Input>
-                    <!-- Falha de integracao nao pode virar "nao encontrado": acusaria o cadastro
-                         do usuario por uma queda do backend. -->
+                    <!-- So o nome do contato escolhido: campo vazio nao precisa de texto ao lado,
+                         o obrigatorio no label e o erro do confirmar ja cobram a escolha. -->
                     <ObjectStatus
                         class="sapUiTinyMarginBegin"
-                        text="{= ${chamadoSap>/sUserCarregando} ? ${i18n>abrirChamadoSapSUserCarregando} : (${chamadoSap>/sUserNome} || (${chamadoSap>/sUserFalha} ? ${i18n>abrirChamadoSapSUserErro} : ${i18n>abrirChamadoSapSUserNaoEncontrado})) }"
+                        tooltip="{chamadoSap>/sUserEmail}"
+                        text="{chamadoSap>/sUserNome}"
                         state="None">
                         <layoutData>
                             <FlexItemData shrinkFactor="1" growFactor="1" />
                         </layoutData>
                     </ObjectStatus>
+                    <!-- Com valueHelpOnly o teclado esta bloqueado, entao esvaziar o campo so e
+                         possivel por aqui. -->
+                    <Button
+                        visible="{= !!${chamadoSap>/sUser} }"
+                        icon="sap-icon://decline"
+                        type="Transparent"
+                        tooltip="{i18n>abrirChamadoSapSUserLimpar}"
+                        press=".onLimparSUserSap">
+                        <layoutData>
+                            <FlexItemData shrinkFactor="0" growFactor="0" />
+                        </layoutData>
+                    </Button>
                 </HBox>
 
                 <Label

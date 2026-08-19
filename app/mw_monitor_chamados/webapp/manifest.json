@@ -5,7 +5,7 @@
     "type": "application",
     "i18n": "i18n/i18n.properties",
     "applicationVersion": {
-      "version": "0.1.2"
+      "version": "0.1.7"
     },
     "title": "{{appTitle}}",
     "description": "{{appDescription}}",
@@ -30,6 +30,8 @@
         "mw_monitor_chamados-display": {
           "semanticObject": "mw_monitor_chamados",
           "action": "display",
+          "title": "{{appTitle}}",
+          "icon": "sap-icon://bbyd-dashboard",
           "signature": {
             "parameters": {},
             "additionalParameters": "allowed"
@@ -41,7 +43,7 @@
   "sap.ui": {
     "technology": "UI5",
     "icons": {
-      "icon": "",
+      "icon": "sap-icon://bbyd-dashboard",
       "favIcon": "",
       "phone": "",
       "phone@2": "",

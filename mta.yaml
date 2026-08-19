@@ -1,9 +1,14 @@
 _schema-version: 3.3.0
-ID: mw-monitor-chamados
-version: 1.0.0
-description: "A simple CAP project."
+ID: mw-help-desk
+version: 1.0.7
+description: "Help Desk - CAP + SAPUI5, publicado no SAP Build Work Zone."
 parameters:
   enable-parallel-deployments: true
+  # deploy_mode html5-repo e SEM modulo approuter, de proposito: a UI vai para o HTML5
+  # Application Repository e quem serve/roteia e o approuter GERENCIADO do Work Zone. Nao
+  # existe URL direta para a UI e `cf apps` mostra so o -srv - isso NAO e deploy incompleto.
+  # Se alguem acrescentar um approuter proprio, passam a existir dois donos da rota e o
+  # xs-app.json do repositorio HTML5 deixa de ser o que vale.
   deploy_mode: html5-repo
 build-parameters:
   before-all:
@@ -11,57 +16,124 @@ build-parameters:
       commands:
         - npm ci
         - npx cds build --production
+
 modules:
-  - name: mw-monitor-chamados-srv
+  # -----------------------------------------------------------------------------------------
+  # BACKEND CAP
+  # -----------------------------------------------------------------------------------------
+  - name: mw-help-desk-srv
     type: nodejs
     path: gen/srv
     parameters:
       instances: 1
       buildpack: nodejs_buildpack
+      # R9 - HOST FIXO. Sem isto o MTA usa default-host, derivado de org + space + nome do
+      # modulo, e a URL do -srv so e conhecida DEPOIS do primeiro deploy - mas o init_data la
+      # embaixo precisa dela ANTES, porque a URL de la e literal (ver R5). Fixando o host, a
+      # URL das destinations ja nasce certa no PRIMEIRO deploy.
+      # Host aceita so a-z, 0-9 e hifen: nao usar ${space} (nao ha garantia de que o nome do
+      # space seja valido como host) nem ponto.
+      # MEDIDO em 2026-08-18 no subaccount megawork-labs-inovation (regiao br10):
+      #   cf domains                                 -> dominio de apps: cfapps.br10.hana.ondemand.com
+      #   cf curl "/v3/routes?hosts=mw-help-desk-srv" -> total_results: 0 (host LIVRE)
+      # Logo a URL do -srv e deterministica: https://mw-help-desk-srv.cfapps.br10.hana.ondemand.com
+      # Depois do PRIMEIRO deploy, confirmar com:
+      #   cf app mw-help-desk-srv | grep -i "^routes:"
+      # e, se a rota nao bater, corrigir os DOIS niveis do init_data e redeployar.
+      # RISCO REMANESCENTE: host e namespace GLOBAL do dominio cfapps.br10, nao do subaccount.
+      # Estava livre na medicao acima, mas se outra org da regiao tomar "mw-help-desk-srv"
+      # antes do deploy, ele falha ao criar a rota e o nome tem de mudar em TRES lugares
+      # (este host + as duas URLs do init_data).
+      host: mw-help-desk-srv
     build-parameters:
       builder: npm-ci
     provides:
-      - name: srv-api # required by consumers of CAP services (e.g. approuter)
+      # Nome INTERNO do mta.yaml (nao existe no BTP): e por ele que o -app-deployer, o
+      # -destinations e o resource de destination declaram dependencia de ORDEM de deploy.
+      # NAO renomear junto com a destination do R7 - sao coisas diferentes.
+      # ATENCAO: pela especificacao do MTA, ${default-url} deriva de ${default-host}
+      # (org + space + modulo) e NAO do `host:` fixado acima - com o R9 este srv-url passa a
+      # publicar um hostname que nao tem rota. Inofensivo hoje porque ninguem consome o
+      # placeholder (o R5 proibe usa-lo no init_data e nao ha approuter, R12). Se um dia
+      # alguem for consumir ~{srv-api/srv-url}, troque o valor por
+      # https://mw-help-desk-srv.cfapps.br10.hana.ondemand.com. NAO medido aqui: e leitura da
+      # spec, nao de deploy.
+      - name: srv-api
         properties:
           srv-url: ${default-url}
     requires:
-      - name: mw-monitor-chamados-auth
-      - name: mw-monitor-chamados-destination
-      - name: mw-monitor-chamados-db
+      - name: mw-help-desk-auth
+      - name: mw-help-desk-destination
+      - name: mw-help-desk-db
 
-  - name: mw-monitor-chamados-db-deployer
+  # -----------------------------------------------------------------------------------------
+  # R10 - HDI. O projeto nasce com container HANA porque o repo tem entidade persistida de
+  # verdade (db/schema.cds). Se o help desk NAO persistir nada, remova este modulo E o resource
+  # mw-help-desk-db (saem juntos) e volte a por "[production]": { "auth": "xsuaa", "db": false }
+  # no package.json - senao o CAP assume db: hana (por causa do @cap-js/hana em dependencies) e
+  # o app entra em crash loop no start com "Database kind \"hana\" configured, but no HDI
+  # container ... bound to application".
+  # ENQUANTO o HDI existir, o caminho contrario tambem vale: NAO reaplicar "db": false, que a
+  # secao 8 do docs/destinations-mta-como-funciona.txt e a armadilha 3 da skill Workzone ainda
+  # mandam por (ambas escritas antes de existir db/schema.cds).
+  # -----------------------------------------------------------------------------------------
+  - name: mw-help-desk-db-deployer
     type: hdb
     path: gen/db
     parameters:
       buildpack: nodejs_buildpack
+    build-parameters:
+      # `cds build` copia db/*.sqlite (o banco de DEV, com dados reais de ChatVisualizacoes)
+      # para gen/db, e sem isto o arquivo vai empacotado no mtar e sobe para o CF. O
+      # @sap/hdi-deploy so olha src/, entao nao quebra nada - e vazamento de dado de dev, nao
+      # bug de deploy. MEDIDO em 2026-08-18: gen/db continha mw-monitor-chamados.sqlite,
+      # -wal e -shm depois de `npx cds build --production`.
+      ignore:
+        - "*.sqlite"
+        - "*.sqlite-wal"
+        - "*.sqlite-shm"
     requires:
-      - name: mw-monitor-chamados-db
+      - name: mw-help-desk-db
 
-  - name: mw-monitor-chamados-app-deployer
+  # -----------------------------------------------------------------------------------------
+  # PUBLICACAO DA UI NO HTML5 APPLICATION REPOSITORY
+  # -----------------------------------------------------------------------------------------
+  - name: mw-help-desk-app-deployer
     type: com.sap.application.content
     path: gen
     build-parameters:
       build-result: app/
       requires:
-        - name: mwmonitorchamadosmw_monitor_chamados
+        - name: mwhelpdeskui
           artifacts:
+            # O nome do zip NAO e livre: vem do archiveName do ui5-task-zipper em
+            # app/mw_monitor_chamados/ui5-deploy.yaml. Se a pasta da UI tiver outro nome,
+            # ajustar path, artifacts e archiveName JUNTOS, senao o build nao acha o artefato.
             - mw_monitor_chamados.zip
           target-path: app/
     requires:
-      - name: mw-monitor-chamados-auth
+      - name: mw-help-desk-auth
       - name: srv-api
-      - name: mw-monitor-chamados-html5-repo-host
+      - name: mw-help-desk-html5-repo-host
         parameters:
           content-target: true
           config:
             HTML5Runtime_enabled: true
-    # Sem bloco `destinations` aqui: o content-target deste modulo e o html5-apps-repo, e um
-    # bloco de destinations so cria destination quando o target e o destination service — o
-    # deploy aceita e descarta em silencio. A srv-api que o xs-app.json usa e criada no
-    # modulo mw-monitor-chamados-destinations.
+    # R3 - NENHUM bloco `destinations` neste modulo. O content-target dele e o html5-apps-repo,
+    # e bloco de destinations so cria destination quando o target e o DESTINATION SERVICE. O
+    # gerador Fiori escreve a destination do backend aqui; o deploy aceita, termina verde, e a
+    # destination NUNCA nasce (medido em 2026-08-05 no app anterior: desde o commit fea9a7f,
+    # semanas achando que era rota, auth ou manifest). Reverter isto = app publicado que quebra
+    # no navegador com `cf logs` do -srv LIMPO de trafego de browser. A destination que o
+    # xs-app.json usa nasce no init_data do resource mw-help-desk-destination, la embaixo.
 
-  - name: mwmonitorchamadosmw_monitor_chamados
+  - name: mwhelpdeskui
     type: html5
+    # UNICA pasta de UI do repo desde 2026-08-19. Existia um gemeo app/mw_help_desk que este
+    # modulo empacotava; ele ficou atras do desenvolvimento e cada deploy parecia "nao
+    # refletir", entao foi removido (recuperavel no historico do git). O nome do modulo segue
+    # mwhelpdeskui de proposito: renomear modulo em MTA ja deployado faz o deployer tratar
+    # como modulo novo.
     path: app/mw_monitor_chamados
     build-parameters:
       build-result: dist
@@ -69,100 +141,142 @@ modules:
       commands:
         - npm ci
         - npm run build
-      supported-platforms:
-        []
+      # supported-platforms vazio: este modulo so produz o zip consumido pelo -app-deployer,
+      # nao vira app no CF.
+      supported-platforms: []
 
-  - name: mw-monitor-chamados-destinations
+  # -----------------------------------------------------------------------------------------
+  # DESTINATIONS BASEADAS EM SERVICE KEY (as que o Work Zone precisa para achar o app)
+  # -----------------------------------------------------------------------------------------
+  - name: mw-help-desk-destinations
     type: com.sap.application.content
     requires:
-      - name: mw-monitor-chamados-auth
+      - name: mw-help-desk-auth
         parameters:
           service-key:
-            name: mw-monitor-chamados-auth-key
-      - name: mw-monitor-chamados-html5-repo-host
+            name: mw-help-desk-auth-key
+      - name: mw-help-desk-html5-repo-host
         parameters:
           service-key:
-            name: mw-monitor-chamados-html5-repo-host-key
+            name: mw-help-desk-html5-repo-host-key
       - name: srv-api
-      - name: mw-monitor-chamados-destination
+      - name: mw-help-desk-destination
         parameters:
           content-target: true
     build-parameters:
       no-source: true
     parameters:
       content:
-        # subaccount (não instance): o Work Zone roda como subscription e só enxerga
-        # destinations de subaccount — confirmado via API do destination service em
-        # 2026-08-04; com instance: o app não aparece no Content Explorer.
+        # R2 - `subaccount:` e NAO `instance:`. O Work Zone roda como SUBSCRIPTION e le somente
+        # destinations de nivel de SUBACCOUNT (confirmado pela API do destination service em
+        # 2026-08-04: com `instance:` a html5-repository aparecia so em /instanceDestinations,
+        # enquanto os apps dos colegas que funcionam no Work Zone estao todos em subaccount).
+        # Reverter para `instance:` = deploy verde, app no repositorio HTML5 e AUSENTE do
+        # Content Explorer do Work Zone.
         subaccount:
           existing_destinations_policy: update
           destinations:
-            - Name: mw-monitor-chamados-html5-repository
-              ServiceInstanceName: mw-monitor-chamados-html5-repo-host
-              ServiceKeyName: mw-monitor-chamados-html5-repo-host-key
+            # Nomes ja prefixados com mw-help-desk-: destination de subaccount e namespace
+            # unico do subaccount inteiro e a policy e `update` (mesmo motivo do R7). Estes
+            # dois nomes nao colidem com os do mw-monitor-chamados.
+            - Name: mw-help-desk-html5-repository
+              ServiceInstanceName: mw-help-desk-html5-repo-host
+              ServiceKeyName: mw-help-desk-html5-repo-host-key
               sap.cloud.service: mwmonitorchamados.service
-            - Name: mw-monitor-chamados-auth
+            - Name: mw-help-desk-auth
               Authentication: OAuth2UserTokenExchange
-              ServiceInstanceName: mw-monitor-chamados-auth
-              ServiceKeyName: mw-monitor-chamados-auth-key
+              ServiceInstanceName: mw-help-desk-auth
+              ServiceKeyName: mw-help-desk-auth-key
               sap.cloud.service: mwmonitorchamados.service
-            # A srv-api NAO entra aqui: este deployer de conteudo so aceita destination
-            # baseada em service key (exige ServiceInstanceName — MEDIDO no deploy de
-            # 2026-08-05: "[ERROR] Missing destination property [ServiceInstanceName] in
-            # destination srv-api"). Destination de URL vai no init_data do resource
-            # mw-monitor-chamados-destination, abaixo.
+            # R4 - a destination do backend (mw-help-desk-srv-api) NAO entra aqui. Este
+            # deployer de conteudo so aceita destination baseada em service key: sem
+            # ServiceInstanceName ele falha com "[ERROR] Missing destination property
+            # [ServiceInstanceName] in destination srv-api" (MEDIDO no deploy de 2026-08-05,
+            # tentando corrigir o R3 do jeito obvio). Destination de URL vive no init_data do
+            # resource mw-help-desk-destination, abaixo.
 
 resources:
-  - name: mw-monitor-chamados-auth
+  - name: mw-help-desk-auth
     type: org.cloudfoundry.managed-service
     parameters:
       service: xsuaa
       service-plan: application
+      # xs-security.json da raiz do repo, hoje vazio (scopes/attributes/role-templates vazios),
+      # o que faz qualquer usuario autenticado do subaccount passar no backend. Enquanto os
+      # dois apps morarem no mesmo repositorio eles COMPARTILHAM este arquivo: inofensivo
+      # agora, deixa de ser no dia em que alguem criar role-template para um deles so.
       path: ./xs-security.json
       config:
-        xsappname: mw-monitor-chamados-${space}
+        # R1 - ${space} e NUNCA ${org}. O nome da org deste subaccount tem espacos e virgula
+        # ("Megawork Consultoria e Sistemas Ltda_megawork-labs-inovation") e o XSUAA recusa com
+        # 'Invalid xsappname ... May only include characters a-z, A-Z, 0-9, _, -, ., /',
+        # deixando o servico em `create failed` - que por sua vez trava o retry
+        # (CF-ServiceInstanceNotFound) ate alguem apagar a instancia quebrada na mao. Como so
+        # existe um space, ${space} sozinho ja da nome unico: mw-help-desk-development.
+        xsappname: mw-help-desk-${space}
         tenant-mode: dedicated
         oauth2-configuration:
           credential-types:
             - "binding-secret"
             - "x509"
-  # Primeira entidade persistida do projeto (ChatVisualizacoes, db/schema.cds — controle de
-  # "chamado visualizado" por requisitante, para a notificação de mensagem nova em Chats/sino
-  # sobreviver a F5). Até aqui tudo era projeção sobre o C4C, sem HANA nenhum.
-  - name: mw-monitor-chamados-db
+
+  # R10 - container HDI da aplicacao: existe porque ha entidade persistida em db/schema.cds.
+  # Removivel junto com o modulo mw-help-desk-db-deployer se o help desk for so projecao sobre
+  # servico externo - ver o comentario naquele modulo, inclusive o "db": false do package.json.
+  - name: mw-help-desk-db
     type: com.sap.xs.hdi-container
     parameters:
       service: hana
       service-plan: hdi-shared
-  - name: mw-monitor-chamados-destination
+
+  - name: mw-help-desk-destination
     type: org.cloudfoundry.managed-service
     parameters:
       service: destination
       service-plan: lite
       config:
-        # HTML5Runtime_enabled: o runtime do Work Zone so resolve destinations de instances
-        # com esta flag (alem das de subaccount).
+        # R6 - HTML5Runtime_enabled: o runtime do Work Zone so resolve destinations de nivel de
+        # INSTANCE quando o service instance tem esta flag. Sem ela o nivel instance abaixo
+        # vira letra morta e sobra so o de subaccount.
         HTML5Runtime_enabled: true
         init_data:
-          # Rota /employee/* do xs-app.json: o nome tem de ser exatamente "srv-api".
-          # NoAuthentication + ForwardAuthToken: a credencial nao esta na destination, o
-          # approuter repassa o JWT do usuario e o CAP valida com o xsuaa. Criada nos DOIS
-          # niveis: instance (desenho padrao do gerador, lida via HTML5Runtime_enabled) e
-          # subaccount (nivel que este subaccount comprovadamente enxerga — ver comentario
-          # no modulo -destinations).
+          # R7 - NOME PROPRIO, "mw-help-desk-srv-api" e nao "srv-api". Destination de nivel de
+          # subaccount vive num namespace unico do subaccount inteiro e aqui a policy e
+          # `update`: se este app criasse outra "srv-api", ela SOBRESCREVERIA a do
+          # mw-monitor-chamados (que ja existe nesse nivel, aponta para outro host e esta
+          # funcionando) e o app antigo passaria a chamar o backend errado.
+          # CONSEQUENCIA FORA DO mta.yaml: o xs-app.json deste app TEM de citar exatamente
+          # "mw-help-desk-srv-api" nas rotas do backend - nas DUAS, ver o rodape.
+          # Cuidado: os `provides: - name: srv-api` e `requires: - name: srv-api` deste arquivo
+          # sao nomes INTERNOS do mta.yaml (ordem de deploy), nao existem no BTP e NAO mudam.
           #
-          # URL FIXA de proposito: neste subaccount o deployer NAO resolve ~{srv-api/srv-url}
-          # dentro de init_data — o broker recebeu o placeholder literal e falhou com
-          # "Failed to update the destination service instance with the user provided
-          # configuration" (MEDIDO em 2026-08-05, dmol da operacao 2ef9279d + bisect via
-          # cf update-service: a MESMA config com URL real e aceita). A rota e estavel
-          # enquanto org/space/nome do modulo nao mudarem; se o -srv trocar de rota,
-          # atualizar aqui.
+          # R8 - criada nos DOIS niveis, de proposito:
+          #   instance:   desenho padrao do gerador, lido pelo Work Zone gracas ao
+          #               HTML5Runtime_enabled acima;
+          #   subaccount: o nivel que este subaccount comprovadamente enxerga (mesma evidencia
+          #               do R2). Se um dia for preciso enxugar, o que NAO pode faltar e o
+          #               subaccount.
+          # NoAuthentication + HTML5.ForwardAuthToken: a destination nao guarda credencial; o
+          # approuter gerenciado repassa o JWT do usuario e o CAP valida contra o XSUAA.
+          #
+          # R5 - a URL e LITERAL de proposito. O placeholder ~{srv-api/srv-url} NAO e resolvido
+          # dentro de init_data: o broker recebe o texto cru e falha com "Failed to update the
+          # destination service instance with the user provided configuration", deixando o
+          # servico em `update failed` - e o pior, o DEPLOY SEGUE e termina "Process finished",
+          # com o erro enterrado no meio do log (MEDIDO em 2026-08-05, operacao 2ef9279d +
+          # bisect via cf update-service: a MESMA config com URL real e aceita). Se o servico
+          # ficar preso em `update failed`, um `cf update-service mw-help-desk-destination -c
+          # '{...config boa...}'` destrava sem recriar a instancia.
+          # A URL abaixo e a do `host: mw-help-desk-srv` declarado no modulo -srv (R9) e NAO foi
+          # medida neste subaccount: conferir apos o primeiro deploy com
+          #   cf app mw-help-desk-srv | grep -i "^routes:"
+          # e, se divergir, corrigir NOS DOIS niveis. Sintoma-assinatura de URL errada: o
+          # navegador quebra e o `cf logs mw-help-desk-srv` fica LIMPO de trafego de browser.
           instance:
             existing_destinations_policy: update
             destinations:
-              - Name: srv-api
-                URL: https://megawork-consultoria-e-sistemas-ltda-448qnbxzt6gcd4x5-d24f9d9f4.cfapps.eu10.hana.ondemand.com
+              - Name: mw-help-desk-srv-api
+                URL: https://mw-help-desk-srv.cfapps.br10.hana.ondemand.com
                 Type: HTTP
                 Authentication: NoAuthentication
                 ProxyType: Internet
@@ -171,18 +285,79 @@ resources:
           subaccount:
             existing_destinations_policy: update
             destinations:
-              - Name: srv-api
-                URL: https://megawork-consultoria-e-sistemas-ltda-448qnbxzt6gcd4x5-d24f9d9f4.cfapps.eu10.hana.ondemand.com
+              - Name: mw-help-desk-srv-api
+                URL: https://mw-help-desk-srv.cfapps.br10.hana.ondemand.com
                 Type: HTTP
                 Authentication: NoAuthentication
                 ProxyType: Internet
                 HTML5.ForwardAuthToken: true
                 HTML5.DynamicDestination: true
     requires:
+      # Dependencia so de ORDEM de deploy (o resource nasce depois do -srv). NAO resolve
+      # placeholder nenhum dentro do init_data - ver R5.
       - name: srv-api
 
-  - name: mw-monitor-chamados-html5-repo-host
+  - name: mw-help-desk-html5-repo-host
     type: org.cloudfoundry.managed-service
     parameters:
       service: html5-apps-repo
       service-plan: app-host
+
+# -------------------------------------------------------------------------------------------
+# FORA DESTE ARQUIVO, mas parte do mesmo caminho - conferir a cada mudanca na UI.
+#
+#   mbt build                        le SEMPRE este arquivo por se chamar mta.yaml. Ele foi
+#                                    mta-help-desk.yaml ate 2026-08-19 e o build exigia copiar
+#                                    o descritor sobre um mta.yaml temporario - passo nao
+#                                    escrito em lugar nenhum, fonte de deploy do app errado.
+#                                    Renomear de volta = o workaround volta.
+#
+#   webapp/manifest.json             dataSource com uri RELATIVA (sem barra inicial): no Work
+#                                    Zone o app roda sob prefixo de path e uri absoluta da 404
+#                                    na raiz do launchpad ANTES de o xs-app.json e a
+#                                    destination serem consultados (MEDIDO em 2026-08-05). Ao
+#                                    mexer no manifest, bumpar applicationVersion: o runtime do
+#                                    HTML5 repo cacheia por versao.
+#
+#   xs-app.json                      a rota ^/employee/(.*)$ cita a destination pelo nome
+#                                    mw-help-desk-srv-api - o mesmo do init_data do resource
+#                                    mw-help-desk-destination (R7). Citar "srv-api" (nome
+#                                    INTERNO do MTA) da deploy verde e nenhuma requisicao
+#                                    chegando ao -srv.
+#
+#   ui5-deploy.yaml                  archiveName mw_monitor_chamados bate com o artifact do
+#                                    modulo mw-help-desk-app-deployer, e additionalFiles inclui
+#                                    o xs-app.json - sem ele o HTML5 Repository nao roteia o
+#                                    backend. Mudando o nome da pasta da UI, mudam JUNTOS:
+#                                    path (modulo mwhelpdeskui), artifacts e archiveName.
+#
+#   ui5.yaml                         metade LOCAL da uri relativa: metadata.name igual ao
+#                                    sap.app.id e fiori-tools-proxy com backend
+#                                    path /employee -> http://localhost:4004; sem isso a uri
+#                                    relativa vira /megawork.mwmonitorchamados/employee/... no
+#                                    cds watch, o CAP nao serve esse path e a tentacao e voltar
+#                                    a uri ABSOLUTA - a armadilha 404 do Work Zone.
+#
+#   bloco "sap.cloud" do manifest    TEM de ficar assim, os DOIS campos:
+#                                      "sap.cloud": { "public": true,
+#                                                     "service": "mwmonitorchamados.service" }
+#                                    sem "public": true o app entra no HTML5 Repository, o
+#                                    deploy fica verde e ele NAO aparece no Content Explorer -
+#                                    mesmo sintoma da destination de nivel errado (R2), causa
+#                                    outra. E o service TEM de casar com o sap.cloud.service
+#                                    das destinations do modulo -destinations: e por esse par
+#                                    que o Work Zone agrupa o business solution.
+#
+#   trocar o sap.app.id              invalida TODO conteudo ja adicionado no Work Zone: o item
+#                                    em My Content aponta para um app que deixou de existir no
+#                                    repositorio e o tile nao aparece mais (MEDIDO em
+#                                    2026-08-19, ao trocar megawork.mwhelpdesk por
+#                                    megawork.mwmonitorchamados). Trocando o id, apagar o item
+#                                    antigo e readicionar pelo Content Explorer.
+#
+#   destinations MANUAIS no cockpit  as que tem credencial nao vem do MTA: C4C (existe no
+#                                    nivel de subaccount desde 2026-08-04) e CALM_ITSM (em
+#                                    2026-08-18 ainda NAO existia, procedimento em
+#                                    docs/destination-calm-itsm-passo-a-passo.txt). Sao de
+#                                    subaccount, entao o app as reusa sem cria-las.
+# -------------------------------------------------------------------------------------------
