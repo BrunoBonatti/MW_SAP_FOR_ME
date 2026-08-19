@@ -271,6 +271,10 @@ service IntegrationService {
     caseNumber     : String;
     subject        : String;
     customerNumber : String;
+    // Última alteração do caso, CRUA ("2026-08-13 11:03:46", UTC) — o parse mora no frontend, como
+    // em ComentarioCasoSap.quando. Vem do mesmo GET de detalhe que já era feito por caso: é a data
+    // que a linha do chat exibe ao lado, e sem ela a lista do BASIS ficava sem data nenhuma.
+    updatedAt      : String;
   }
 
   // Composição da tela SAP: os clientes saem dos PRÓPRIOS chamados (ClientesDistintosChamados,
@@ -342,6 +346,62 @@ service IntegrationService {
     comentarios : array of ComentarioCasoSap;
   };
 
+  // Conversa do caso pelo CHAMADO, para os perfis sem S-User confiável (funcional e requisitante).
+  // A chave que a tela manda é o ID DO CHAMADO e nunca o correlationId: sem 'reporter' quem escopa
+  // a leitura passa a ser o C4C, então o handler relê o chamado com o filtro do perfil e tira o
+  // z_case_number_KUT / z_id_sfm_KUT DE LÁ — aceitar o id vindo do navegador deixaria qualquer
+  // usuário autenticado ler os comentários de um caso de outro cliente do tenant.
+  // Header e conversa na MESMA chamada porque a tela pinta cabeçalho e bolhas no mesmo clique;
+  // headerFalha existe porque o header é acessório e as mensagens são o essencial (mesmo desenho do
+  // numeroPendente de AbrirCasoSap).
+  function ConversaCasoSapDoChamado(chamadoId : String, email : String) returns {
+    correlationId  : String;
+    caseNumber     : String;
+    subject        : String;
+    status         : String;
+    priority       : String;
+    customerNumber : String;
+    createdAt      : String;
+    updatedAt      : String;
+    // GET de header vazio ou em erro: a conversa vale, o cabeçalho é que fica sem assunto/status.
+    headerFalha    : Boolean;
+    total          : Integer;
+    exibidos       : Integer;
+    // Mesma semântica de ComentariosCasoSap: comparado com a PÁGINA lida, não com exibidos.
+    truncado       : Boolean;
+    comentarios    : array of ComentarioCasoSap;
+  };
+
+  // Linha da lista do "Chat com SAP" enriquecida na ALM. chamadoId é a chave de casamento com a
+  // linha que a tela já pintou (ID do chamado no C4C, o mesmo id de _pathDoChatPorId): o
+  // correlationId NUNCA sobe, senão a tela poderia pedir a conversa de outro cliente do tenant.
+  // ultimaMensagemEm vai CRU ("2021-06-01 12:00:00", UTC): o parse mora no frontend
+  // (_dataDaAlmParaIsoLocal), como em ComentarioCasoSap.quando.
+  type ConversaCasoSapResumo {
+    chamadoId        : String;
+    caseNumber       : String;
+    subject          : String;
+    ultimaMensagemEm : String;
+    // Este caso específico não pôde ser lido: a tela mantém o fallback do chamado nesta linha em
+    // vez de apagá-la — sem o flag ela repintaria com campo vazio e a linha ficaria sem rótulo.
+    falha            : Boolean;
+  }
+
+  // Enriquecimento em LOTE da lista dos perfis sem S-User: número, assunto e data da última
+  // mensagem vêm da ALM, e não do chamado. Recebe só o e-mail porque o escopo continua sendo o do
+  // C4C — o handler relê os chamados do usuário com o filtro do perfil e tira os campos Z DE LÁ,
+  // pelo mesmo motivo de ConversaCasoSapDoChamado.
+  function ConversasCasoSapDoRequisitante(email : String) returns {
+    total     : Integer;
+    exibidos  : Integer;
+    // Mais chamados com caso na ALM do que o teto por chamada: sem o flag o log afirmaria que o
+    // usuário só tem os que couberam.
+    truncado  : Boolean;
+    // Alguma leitura na ALM falhou; a lista continua válida, só não está completa.
+    falha     : Boolean;
+    conversas : array of ConversaCasoSapResumo;
+  };
+
   // Action e nao function pelo mesmo motivo de AbrirCasoSap: function vira GET (repetivel) e o
   // CommentPost nao tem chave de deduplicacao nem delete, entao a repeticao grava em dobro.
   action EnviarComentarioCasoSap(
@@ -353,6 +413,57 @@ service IntegrationService {
     correlationId : String;
     // A ALM devolve so o id, entao a bolha e montada aqui para dispensar um GET apos o POST.
     comentario    : ComentarioCasoSap;
+  };
+
+  // Linha da lista de anexos do caso: a ALM nao devolve tamanho neste endpoint, entao a tela
+  // mostra so nome/descricao/autor/data. idAnexo e a chave do download (idAttachment).
+  type AnexoCasoSap {
+    idAnexo     : String;
+    nome        : String;
+    descricao   : String;
+    contentType : String;
+    url         : String;
+    // Datas cruas da ALM: o parse fica no frontend, como no resto do app.
+    criadoEm    : String;
+    criadoPor   : String;
+  }
+
+  // Um GET por abertura do detalhe, com limit explicito: sem ele vale o default nao documentado
+  // do servidor. truncado avisa quando a ALM tem mais anexo do que a tela mostra.
+  function AnexosCasoSap(correlationId : String, sUser : String) returns {
+    total    : Integer;
+    exibidos : Integer;
+    truncado : Boolean;
+    anexos   : array of AnexoCasoSap;
+  };
+
+  // Mesmo motivo de ConteudoAnexo (C4C): base64 e nao LargeBinary, porque o adapter V4 apaga
+  // coluna binaria do $select antes do handler e o download tem que sair por function.
+  type ConteudoAnexoCasoSap {
+    nome     : String;
+    mimeType : String;
+    base64   : LargeString;
+  }
+
+  // nome so serve de eco/log: o GET do binario nao devolve header legivel pelo send() do CAP
+  // (client.js retorna so response.data), entao contentType/nome vem da listagem.
+  function AnexoCasoSapConteudo(idAnexo : String, sUser : String, nome : String)
+    returns ConteudoAnexoCasoSap;
+
+  // Action e nao function pelo mesmo motivo de AbrirCasoSap/EnviarComentarioCasoSap: function vira
+  // GET repetivel e o POST do anexo nao tem chave de deduplicacao. UM arquivo por chamada: dois
+  // base64 de 10 MB no mesmo corpo estourariam o body_parser de 15mb antes de qualquer handler.
+  action EnviarAnexoCasoSap(
+    correlationId      : String,
+    sUser              : String,
+    installationNumber : String,
+    nome               : String,
+    descricao          : String,
+    base64             : LargeString
+  ) returns {
+    correlationId : String;
+    // idAnexo volta vazio: o POST de vinculo devolve so o id do CASO, e a tela rele a lista.
+    anexo         : AnexoCasoSap;
   };
 
   // z_customer_number_KUT vem do BuyerPartyID (BusinessPartnerCollection), nunca do chamado.

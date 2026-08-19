@@ -119,11 +119,11 @@
                     <tnt:NavigationListGroup
                         id="navGroupSap"
                         text="{i18n>sideContentGroupSap}">
-                        <!-- Os dois itens usam enabled (nao visible): o grupo SAP continua na tela
-                             para quem nao entra - so o botao "Abrir chamado SAP" do detalhe some de
-                             fato. E as condicoes sao DIFERENTES de proposito: gerenciar os casos e
-                             do BASIS, conversar com o SAP e de qualquer funcionario (o contato
-                             segue fora dos dois). -->
+                        <!-- So "Acompanhar chamados SAP" tem regra, e por enabled (nao visible): o
+                             grupo SAP continua na tela para quem nao entra - o unico controle que
+                             some de fato e o botao "Abrir chamado SAP" do detalhe. "Chat com SAP"
+                             fica aberto para os TRES perfis (decisao do usuario): gerenciar os casos
+                             e do BASIS, conversar com o SAP nao e de ninguem em particular. -->
                         <tnt:NavigationListItem
                             key="acompanharChamadosSap"
                             text="{i18n>sideContentTrackTicketsSap}"
@@ -132,8 +132,7 @@
                         <tnt:NavigationListItem
                             key="chatsSap"
                             text="{i18n>sideContentChatSap}"
-                            icon="sap-icon://comment"
-                            enabled="{= ${view>/requisitanteEhFuncionario} }" />
+                            icon="sap-icon://comment" />
                     </tnt:NavigationListGroup>
                 </tnt:NavigationList>
             </tnt:SideNavigation>

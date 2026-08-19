@@ -91,6 +91,37 @@ function resolverEmailDoRequisitante(req) {
 
     return emailLogado;
 }
+
+// Identidade de quem le a conversa do caso pelo CHAMADO. Nao usa resolverEmailDoRequisitante
+// direto: la o e-mail informado pelo frontend VENCE o JWT ate em producao (toggle PROVISORIO de
+// homologacao), e la o preco disso e a UI - flags de perfil. Aqui o preco seria o DADO: e o e-mail
+// que escolhe de quem sao os chamados relidos no C4C e, por eles, os comentarios lidos na ALM SEM
+// 'reporter'. Com o e-mail do navegador vencendo, qualquer usuario autenticado passaria o e-mail de
+// um contato de outro cliente e leria a conversa dele - o mesmo vazamento que a decisao de nao
+// aceitar correlationId da tela existe para evitar, so trocando a chave. Entao em producao manda o
+// JWT (precedencia de resolverEmailDoChat) e o e-mail informado so entra quando o JWT nao traz
+// nada; fora de producao o toggle continua valendo, que e onde ele se homologa. CRU, sem
+// toLowerCase, pelo mesmo motivo de resolverEmailDoRequisitante: vai para EMailURI/Email do C4C,
+// comparacoes exatas.
+function resolverEmailDoEscopoCasoSap(req) {
+    const emailInformado = String((req.data && req.data.email) || "").trim();
+    const emailLogado = String((req.user && req.user.attr && req.user.attr.email) || "").trim();
+
+    if (!ehProducao()) {
+        return emailInformado || emailLogado || EMAIL_CONTATO_DEV;
+    }
+
+    if (emailLogado) {
+        return emailLogado;
+    }
+
+    if (emailInformado) {
+        LOG.warn(`JWT sem attr.email em producao: escopo da conversa do caso resolvido pelo e-mail `
+            + `informado (${emailInformado}). Conferir o atributo email do xsuaa.`);
+    }
+
+    return emailInformado;
+}
 // Nome totalmente qualificado (db/schema.cds): passado como STRING para SELECT/UPSERT porque a
 // entidade e local (persistida), nao exposta em nenhuma projection da IntegrationService.
 const CHAT_VISUALIZACOES = "megawork.mwmonitorchamados.ChatVisualizacoes";
@@ -171,11 +202,44 @@ const MAXIMO_DETALHES_CASOS_TELA_SAP = 60;
 // chamada so; caso que passa disso e patologico, e ai truncado avisa.
 const LIMITE_COMENTARIOS_CASO_SAP = 200;
 
+// Teto por chamada, MEDIDO e nao chutado: 30 casos = 60 GETs = ~21 s a 6 em paralelo neste
+// tenant (2,5-2,9 req/s estaveis). 60 casos passariam de 40 s para um enriquecimento que roda em
+// TODA recarga de /Tickets; acima disso a tela fica com o fallback do chamado e truncado avisa.
+const MAXIMO_CONVERSAS_ENRIQUECIDAS_SAP = 30;
+
+// So o comentario mais recente interessa aqui: a lista mostra UMA data. A ordem DESC da ALM foi
+// observada, nao documentada (o endpoint nao tem sort), entao o limit e barato e a defesa e o
+// maximo sobre o que voltou - ver ultimaDataDeComentarios.
+const LIMITE_ULTIMO_COMENTARIO_CASO_SAP = 1;
+
 // O POST nao aceita type: sem este valor a tela releria a conversa so para saber o lado da bolha.
 const TIPO_COMENTARIO_CLIENTE_SAP = "Info for SAP";
 
 // Teto nosso, nao da API: a SAP corta texto longo em silencio, e um 400 explicito avisa.
 const TAMANHO_MAXIMO_COMENTARIO_CASO_SAP = 5000;
+
+// Teto do GET de listagem de anexos: fecha a lista numa chamada so, e truncado avisa o resto.
+const LIMITE_ANEXOS_CASO_SAP = 100;
+
+// Mesmo teto do FileUploader do front (MAX_BYTES_ANEXO): o base64 de 10 MB da 13.981.016 bytes
+// contra os 15.728.640 do @cds.server.body_parser.limit, sobrando ~11%. A SAP aceita 30 MB, mas
+// dois arquivos nesse tamanho nem chegariam ao handler.
+const TAMANHO_MAXIMO_ANEXO_CASO_SAP_BYTES = 10 * 1024 * 1024;
+
+// Lista INTEIRA do BinaryAttachment (CALM_ITSM.json), espelhada em EXTENSOES_ANEXO_SAP do
+// controller: fora dela a ALM devolve 200 com url e descarta o arquivo em silencio, entao recusar
+// aqui e a unica defesa. Nao encurtar por gosto - sar, car, dmp, har, eml, evtx e trace sao
+// justamente o que o suporte da SAP pede, e o 7z e o unico ausente da lista da SAP.
+const EXTENSOES_ANEXO_CASO_SAP = ["016", "abp", "addons", "aml", "asc", "atl", "avi", "biar", "bmp",
+    "bpmn", "bz2", "cab", "callstack", "car", "cif", "csv", "dkp", "dmp", "doc", "docm", "docx",
+    "dwi", "elg", "eml", "err", "error", "errorinfo", "evtx", "gif", "glf", "gz", "gzip", "har",
+    "htm", "html", "hwl", "inf", "ini", "iqmsq", "jar", "jpeg", "jpg", "json", "lcmbiar", "log",
+    "mdb", "mdl", "mmap", "monitor", "mov", "mp4", "msg", "odp", "ods", "odt", "out", "par",
+    "pcapng", "pcx", "pdf", "pl", "pml", "png", "pps", "ppsx", "ppt", "pptx", "properties", "prt",
+    "rar", "rep", "rh", "rpm", "rpt", "rtf", "sar", "sav", "saz", "sca", "sck", "scm", "sgx", "sh",
+    "sim", "snp", "sqf", "sqlite", "tar", "tgz", "tif", "trace", "trc", "tsk", "txt", "tz", "udc",
+    "udt", "unv", "url", "vds", "ver", "war", "wav", "wid", "wmv", "wri", "xlb", "xlc", "xlf",
+    "xls", "xlsm", "xlsx", "xlt", "xml", "xsl", "z", "z01", "z02", "z03", "z04", "z05", "zip"];
 
 // Escopo da lista: funcionario interno entra como executor (espelha o Main.controller.js).
 const CAMPO_ESCOPO_REQUISITANTE_C4C = "BuyerMainContactPartyID";
@@ -236,6 +300,18 @@ const MAXIMO_ENTRADAS_CACHE_ULTIMA_MENSAGEM = 500;
 // Chave = objectID, NUNCA o usuario: guarda a data da ultima mensagem, jamais a decisao
 // mensagemNova (essa depende do visualizadoEm de cada um e e recalculada a cada chamada).
 const cacheUltimaMensagemPorChamado = new Map();
+
+// 2 min e nao 5: e a data que aparece na LISTA, e o clique le a conversa ao vivo - servi-la mais
+// vencida que isso mostraria na linha uma data mais velha que a ultima bolha do chat aberto.
+const TTL_CACHE_CONVERSA_CASO_SAP_MS = 2 * 60 * 1000;
+
+// Processo vive semanas no CF: Map por correlationId sem teto vira leak (mesmo motivo do cache
+// de ultima mensagem).
+const MAXIMO_ENTRADAS_CACHE_CONVERSA_CASO_SAP = 500;
+
+// Chave = correlationId, NUNCA o usuario: numero, assunto e data sao do CASO. O escopo (quem
+// pode ver esse caso) e refeito no C4C a cada chamada, antes de qualquer leitura do cache.
+const cacheConversaCasoSapPorCorrelacao = new Map();
 
 // Env propria: SAP_LOTES_SIMULTANEOS e o knob do 429 da ALM, este e do C4C, que tem outro limite.
 // || fora do Number: env nao numerica daria NaN e Array.from({length: NaN}) zeraria os lotes.
@@ -389,6 +465,44 @@ function lerCacheUltimaMensagem(sObjectID) {
     return oEntrada;
 }
 
+// Mesmo desenho do cache de ultima mensagem: expira por TTL e, se ainda passar do teto, descarta
+// as mais antigas (o Map guarda a ordem de insercao, entao a primeira chave e a mais velha).
+function limparCacheConversaCasoSap() {
+    const iAgora = Date.now();
+
+    for (const [sChave, oEntrada] of cacheConversaCasoSapPorCorrelacao) {
+        if (iAgora - oEntrada.quando >= TTL_CACHE_CONVERSA_CASO_SAP_MS) {
+            cacheConversaCasoSapPorCorrelacao.delete(sChave);
+        }
+    }
+
+    while (cacheConversaCasoSapPorCorrelacao.size > MAXIMO_ENTRADAS_CACHE_CONVERSA_CASO_SAP) {
+        cacheConversaCasoSapPorCorrelacao.delete(
+            cacheConversaCasoSapPorCorrelacao.keys().next().value);
+    }
+}
+
+// Toda escrita poda: os 6 trabalhadores gravam concorrentemente e uma limpeza avulsa por chamada
+// deixaria o Map passar do teto entre uma poda e outra.
+function gravarCacheConversaCasoSap(correlationId, dados) {
+    cacheConversaCasoSapPorCorrelacao.set(correlationId, { quando: Date.now(), dados });
+    limparCacheConversaCasoSap();
+}
+
+// Confere o TTL na leitura tambem: a varredura de 30 casos pode durar mais que a janela, o que
+// serviria data vencida no fim do lote.
+function lerCacheConversaCasoSap(correlationId) {
+    const oEntrada = cacheConversaCasoSapPorCorrelacao.get(correlationId);
+    if (!oEntrada) return null;
+
+    if (Date.now() - oEntrada.quando >= TTL_CACHE_CONVERSA_CASO_SAP_MS) {
+        cacheConversaCasoSapPorCorrelacao.delete(correlationId);
+        return null;
+    }
+
+    return oEntrada;
+}
+
 // Blindagem de shape: com kind "odata-v2" o cliente remoto do CAP ja desembrulha o envelope
 // {d:{results:[...]}} do C4C, entao linhasDaResposta normalmente so repassa o array. Ela cobre o
 // caso de a resposta chegar crua (kind diferente, mock ou erro de negociacao) e normaliza a
@@ -483,15 +597,129 @@ async function funcionarioEhBasis(servico, employeeID) {
     }
 }
 
-// GET unico da lista e do detalhe: evita as duas divergirem se path/reporter mudarem. Nao trata erro.
-async function lerCasoSapCru(calmItsmService, correlationId, sUser) {
-    const parametros = new URLSearchParams({ id: correlationId, reporter: sUser });
+// GET unico de /supportcases/cases: os filtros chegam prontos porque ha dois escopos - o caminho
+// do S-User consulta por id+reporter, e o caminho do chamado (sem S-User) consulta por caseNumber e
+// cai para id. Um send so evita as duas versoes divergirem se o path mudar. Nao trata erro.
+async function lerCasosSapCru(calmItsmService, filtros) {
+    const parametros = new URLSearchParams(filtros);
 
     return calmItsmService.send({
         method: "GET",
         path: `/supportcases/cases?${parametros}`
     });
 }
+
+// GET unico da lista e do detalhe: evita as duas divergirem se path/reporter mudarem. Nao trata erro.
+// Assinatura preservada de proposito: lista, detalhe e o GET do numero do AbrirCasoSap continuam
+// pedindo id+reporter na MESMA ordem de query de antes.
+async function lerCasoSapCru(calmItsmService, correlationId, sUser) {
+    return lerCasosSapCru(calmItsmService, { id: correlationId, reporter: sUser });
+}
+
+// Um GET, dois escopos: com reporter (S-User) e sem (escopo ja garantido pelo chamado no C4C).
+// limit sempre, e nao do chamador: sem ele vale o default nao documentado do servidor.
+// filtros primeiro, limit depois: mantem a query id/reporter/limit do caminho que ja existia.
+// limite opcional: o enriquecimento da lista quer so o comentario mais recente (limit=1) e a
+// conversa quer a pagina inteira. Default preservado para nao mexer em quem ja chama.
+async function lerComentariosCasoSapCru(calmItsmService, filtros, limite) {
+    const parametros = new URLSearchParams({
+        ...filtros,
+        limit: String(limite || LIMITE_COMENTARIOS_CASO_SAP)
+    });
+
+    return calmItsmService.send({
+        method: "GET",
+        path: `/supportcases/cases/comments?${parametros}`
+    });
+}
+
+// Aspas duplas e CRLF no nome quebrariam o Content-Disposition e injetariam partes falsas.
+const textoSeguroMultipart = (valor) => String(valor ?? "").replace(/[\r\n"]/g, " ").trim();
+
+// Multipart a mao: form-data existe so como dependencia transitiva do axios, e o send() do CAP
+// entrega Buffer cru sem serializar (query.js: Buffer nunca vira JSON e o content-length sai certo).
+function montarMultipartAnexoSap({ installation, nome, tipo, descricao, base64 }) {
+    // '-' nunca aparece no alfabeto base64, entao este boundary nao colide com o conteudo.
+    const limite = `----mwAnexoSap${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`;
+    const campo = (chave, valor) =>
+        `--${limite}\r\nContent-Disposition: form-data; name="${chave}"\r\n\r\n${valor}\r\n`;
+    const nomeSeguro = textoSeguroMultipart(nome);
+
+    let corpo = campo("installation", textoSeguroMultipart(installation));
+
+    if (nomeSeguro) corpo += campo("name", nomeSeguro);
+    if (tipo) corpo += campo("type", textoSeguroMultipart(tipo));
+    if (descricao) corpo += campo("description", textoSeguroMultipart(descricao));
+
+    corpo += `--${limite}\r\nContent-Disposition: form-data; name="attachment"; `
+        + `filename="${nomeSeguro || "anexo"}"\r\n`
+        + `Content-Type: application/octet-stream\r\n\r\n${base64}\r\n`
+        + `--${limite}--\r\n`;
+
+    return { limite, corpo: Buffer.from(corpo, "utf8") };
+}
+
+// Extensao em minusculas, sem o ponto: e o campo "type" do POST e a chave da lista permitida.
+const extensaoDoNomeAnexo = (nome) => {
+    const texto = String(nome ?? "");
+    const iPonto = texto.lastIndexOf(".");
+
+    return iPonto >= 0 ? texto.slice(iPonto + 1).toLowerCase() : "";
+};
+
+// Formato do GET de listagem ("2021-06-01 12:00:00"): o POST nao devolve data e a tela le uma so.
+const agoraNoFormatoDaAlm = () => new Date().toISOString().slice(0, 19).replace("T", " ");
+
+// Mensagem de erro da ALM legivel tambem no GET binario: com _binary o axios usa arraybuffer para
+// 4xx/5xx tambem, entao o corpo chega como Buffer e o body.error.message ficaria undefined - a
+// falha viraria o inutil "Request failed with status code 400" e o motivo real se perderia.
+const mensagemDeErroDaAlm = (respostaErro, erro) => {
+    const corpo = respostaErro?.body;
+
+    if (Buffer.isBuffer(corpo)) {
+        try {
+            return JSON.parse(corpo.toString("utf8"))?.error?.message || erro.message;
+        } catch {
+            // Corpo nao-JSON (pagina de login do gateway, por exemplo): o texto cru nao ajuda.
+            return erro.message;
+        }
+    }
+
+    return corpo?.error?.message || erro.message;
+};
+
+// contentType da ALM pode vir como EXTENSAO ("pdf") e nao como MIME: o schema Attachment documenta
+// os dois. Sem normalizar, o Blob do download nasce com type "pdf" e o SO nao reconhece o arquivo.
+const MIME_POR_EXTENSAO_ANEXO = {
+    bmp: "image/bmp", csv: "text/csv", doc: "application/msword",
+    docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    eml: "message/rfc822", gif: "image/gif", gz: "application/gzip", gzip: "application/gzip",
+    htm: "text/html", html: "text/html", jpeg: "image/jpeg", jpg: "image/jpeg",
+    json: "application/json", mov: "video/quicktime", mp4: "video/mp4",
+    msg: "application/vnd.ms-outlook", odp: "application/vnd.oasis.opendocument.presentation",
+    ods: "application/vnd.oasis.opendocument.spreadsheet",
+    odt: "application/vnd.oasis.opendocument.text", pdf: "application/pdf", png: "image/png",
+    ppt: "application/vnd.ms-powerpoint",
+    pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    rar: "application/vnd.rar", rtf: "application/rtf", tar: "application/x-tar",
+    tif: "image/tiff", xls: "application/vnd.ms-excel",
+    xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    xml: "application/xml", zip: "application/zip"
+};
+
+// Vazio de proposito no que nao reconhece: a tela usa o MIME_TYPE_PADRAO_ANEXO dela e nao um tipo
+// inventado, que abriria o arquivo no aplicativo errado.
+const mimeTypeDoAnexoDaAlm = (valor, nome) => {
+    const texto = String(valor ?? "").trim().toLowerCase();
+
+    if (texto.includes("/")) {
+        return texto;
+    }
+
+    // Log/trc/txt e afins nao entram no mapa: a extensao do NOME e a mesma informacao, e text/plain
+    // errado num binario e pior que tipo nenhum.
+    return MIME_POR_EXTENSAO_ANEXO[texto] || MIME_POR_EXTENSAO_ANEXO[extensaoDoNomeAnexo(nome)] || "";
+};
 
 // ALM manda "" e nao null: String(x ?? "") preserva o vazio e evita "undefined" na tela.
 function casoSapDetalhadoComoResposta(caso, correlationId) {
@@ -526,6 +754,117 @@ function casoSapDetalhadoComoResposta(caso, correlationId) {
     };
 }
 
+// Resposta de /supportcases/cases/comments -> envelope da conversa da tela. Compartilhada pelas
+// DUAS functions da conversa (ComentariosCasoSap, por S-User, e ConversaCasoSapDoChamado, pelo
+// chamado): o payload da ALM e um so, e duas copias divergiriam na primeira mudanca dele.
+function comentariosCasoSapComoResposta(resposta) {
+    const linhas = Array.isArray(resposta?.results) ? resposta.results : [];
+
+    // O envelope traz um count que e o tamanho da propria pagina e nao diz nada a tela: quem
+    // responde "faltou comentario?" e o totalCount contra o limit.
+    const total = Number(resposta?.totalCount ?? linhas.length);
+
+    const comentarios = linhas
+        .map((linha) => ({
+            // value vem em HTML ("<p>Hello!</p>"): a bolha do chat mostra texto, nao markup.
+            texto: textoSimplesDoHtml(linha.value),
+            // "2021-06-01 12:00:00" em UTC, repassado como veio: o servidor nao conhece o
+            // fuso do usuario, e o parse mora no frontend (_paraIsoLocal).
+            quando: String(linha.createdAt ?? ""),
+            // A ALM so tem o S-User; nome de pessoa nao existe neste endpoint.
+            autor: String(linha.createdBy ?? ""),
+            // Unico discriminador de direcao da bolha: "Info for SAP" e o que o cliente
+            // escreveu, "Info for Customer" e a resposta da SAP.
+            tipo: String(linha.type ?? "")
+        }))
+        // Comentario sem texto viraria bolha em branco na conversa.
+        .filter((comentario) => comentario.texto);
+
+    return {
+        total,
+        // Compara com a PAGINA lida, nao com exibidos: comentario vazio filtrado encurta a
+        // lista sem que a ALM tenha escondido nada.
+        truncado: total > linhas.length,
+        exibidos: comentarios.length,
+        comentarios
+    };
+}
+
+// Com o limit=1 de hoje a unica garantia e a ordem DESC OBSERVADA neste tenant (o endpoint ignora
+// orderby); o maximo lexicografico ("YYYY-MM-DD HH:MM:SS") so defende se o limite subir.
+// Nao passa por comentariosCasoSapComoResposta de proposito: ela descarta comentario sem texto, e
+// comentario vazio ainda e uma mensagem para efeito de DATA.
+function ultimaDataDeComentarios(resposta) {
+    const linhas = Array.isArray(resposta?.results) ? resposta.results : [];
+
+    return linhas.reduce((maior, linha) => {
+        const quando = String(linha?.createdAt ?? "").trim();
+        return quando > maior ? quando : maior;
+    }, "");
+}
+
+// Um caso = 2 GETs (header + ultimo comentario), em SERIE: os trabalhadores ja deixam 6
+// requisicoes em voo, que e a concorrencia MEDIDA sem 429, e dispara-los juntos dobraria isso.
+// Nunca lanca: caso ilegivel volta com falha e a tela fica com o fallback do chamado.
+async function enriquecerConversaCasoSap(calmItsmService, correlationId, contexto) {
+    const emCache = lerCacheConversaCasoSap(correlationId);
+    // Copia: o consumidor mexer no objeto corromperia o cache para as proximas chamadas.
+    if (emCache) return { ...emCache.dados };
+
+    let caso = null;
+    try {
+        const resposta = await lerCasosSapCru(calmItsmService, { id: correlationId });
+
+        // Por id o Case vem SEM envelope (ver DetalheCasoSap); array e {results} ficam como
+        // defesa caso o formato mude.
+        const achado = (Array.isArray(resposta) ? resposta[0]
+            : Array.isArray(resposta?.results) ? resposta.results[0]
+                : resposta) || null;
+
+        // Conferir a chave e a UNICA barreira deste GET: ele sai SEM 'reporter' (o escopo foi
+        // feito no C4C). Sem isso, campo Z apontando para outro caso poria o numero e o assunto
+        // de outro cliente na lista.
+        if (achado && typeof achado === "object"
+            && String(achado.id ?? "").trim() === correlationId) {
+            caso = achado;
+        } else if (achado) {
+            LOG.warn(`ALM devolveu o caso ${achado.id || "<sem id>"} para o id ${correlationId} `
+                + `(${contexto}): header descartado.`);
+        }
+    } catch (erro) {
+        LOG.warn(`Falha ao ler o header do caso ${correlationId} (${contexto}): ${erro.message}`);
+    }
+
+    let ultimaMensagemEm = "";
+    let comentariosFalharam = false;
+    try {
+        ultimaMensagemEm = ultimaDataDeComentarios(await lerComentariosCasoSapCru(
+            calmItsmService, { id: correlationId }, LIMITE_ULTIMO_COMENTARIO_CASO_SAP));
+    } catch (erro) {
+        comentariosFalharam = true;
+
+        // MEDIDO: o updatedAt do header e sempre >= a data do ultimo comentario (no caso de
+        // teste, +1h34), entao so erra para mais - e vale bem mais que o outro fallback, que e a
+        // data de ABERTURA do chamado.
+        ultimaMensagemEm = String(caso?.updatedAt ?? "").trim();
+        LOG.warn(`Falha ao ler o ultimo comentario do caso ${correlationId} (${contexto}): `
+            + `${erro.message}; data cai para o updatedAt do header.`);
+    }
+
+    const dados = {
+        caseNumber: String(caso?.caseNumber ?? "").trim(),
+        subject: String(caso?.subject ?? "").trim(),
+        ultimaMensagemEm,
+        falha: !caso || comentariosFalharam
+    };
+
+    // Falha NAO entra no cache: erro transitorio da ALM ficaria grudado 2 min numa linha que a
+    // proxima recarga resolveria.
+    if (!dados.falha) gravarCacheConversaCasoSap(correlationId, dados);
+
+    return dados;
+}
+
 // caseNumber e subject so existem no GET de detalhe, um por caso. Compartilhada pelo dialogo e
 // pela tela para as duas nao divergirem. Nunca lanca: caso ilegivel sai da lista com warn.
 async function lerDetalhesCasosSap(calmItsmService, correlacoes, sUser, contexto) {
@@ -547,7 +886,12 @@ async function lerDetalhesCasosSap(calmItsmService, correlacoes, sUser, contexto
                 detalhes[indice] = {
                     correlationId,
                     caseNumber: String(caso?.caseNumber ?? ""),
-                    subject: String(caso?.subject ?? "")
+                    subject: String(caso?.subject ?? ""),
+                    // updatedAt vem NESTE payload e era descartado: nenhum GET novo, so paramos de
+                    // jogar fora a unica data que o caso tem na lista (a linha do chat do BASIS
+                    // aparecia sem data). Ultima ALTERACAO do caso, nao do ultimo comentario -
+                    // MEDIDO que fica >= a data dele.
+                    updatedAt: String(caso?.updatedAt ?? "")
                 };
             } catch (erro) {
                 // Um caso ilegivel nao pode esconder os demais da lista.
@@ -2387,19 +2731,11 @@ module.exports = cds.service.impl(async function () {
             return vazio;
         }
 
-        const parametros = new URLSearchParams({
-            id: correlationId,
-            reporter: sUser,
-            limit: String(LIMITE_COMENTARIOS_CASO_SAP)
-        });
-
         let resposta;
         try {
             const calmItsmService = await conectarCalmItsm();
-            resposta = await calmItsmService.send({
-                method: "GET",
-                path: `/supportcases/cases/comments?${parametros}`
-            });
+            resposta = await lerComentariosCasoSapCru(calmItsmService,
+                { id: correlationId, reporter: sUser });
         } catch (erro) {
             LOG.warn(`Falha ao ler os comentarios do caso ${correlationId} `
                 + `(S-User ${sUser}): ${erro.message}`);
@@ -2407,35 +2743,373 @@ module.exports = cds.service.impl(async function () {
                 `Nao foi possivel consultar os comentarios do caso: ${erro.message}`);
         }
 
-        const linhas = Array.isArray(resposta?.results) ? resposta.results : [];
+        return comentariosCasoSapComoResposta(resposta);
+    });
 
-        // O envelope traz um count que e o tamanho da propria pagina e nao diz nada a tela: quem
-        // responde "faltou comentario?" e o totalCount contra o limit.
-        const total = Number(resposta?.totalCount ?? linhas.length);
+    // Conversa do caso para quem nao tem S-User (funcional e requisitante): 1 chamada por clique.
+    // A tela manda o ID DO CHAMADO; o correlationId sai daqui, do proprio chamado no C4C, porque
+    // sem 'reporter' na ALM o escopo passa a ser o filtro do perfil no C4C. Aceitar o correlationId
+    // do navegador abriria a conversa de caso de OUTRO cliente do tenant.
+    this.on("ConversaCasoSapDoChamado", async (req) => {
+        const chamadoId = String(req.data.chamadoId || "").trim();
+        const vazio = {
+            correlationId: "", caseNumber: "", subject: "", status: "", priority: "",
+            customerNumber: "", createdAt: "", updatedAt: "", headerFalha: false,
+            total: 0, exibidos: 0, truncado: false, comentarios: []
+        };
 
-        const comentarios = linhas
-            .map((linha) => ({
-                // value vem em HTML ("<p>Hello!</p>"): a bolha do chat mostra texto, nao markup.
-                texto: textoSimplesDoHtml(linha.value),
-                // "2021-06-01 12:00:00" em UTC, repassado como veio: o servidor nao conhece o
-                // fuso do usuario, e o parse mora no frontend (_paraIsoLocal).
-                quando: String(linha.createdAt ?? ""),
-                // A ALM so tem o S-User; nome de pessoa nao existe neste endpoint.
-                autor: String(linha.createdBy ?? ""),
-                // Unico discriminador de direcao da bolha: "Info for SAP" e o que o cliente
-                // escreveu, "Info for Customer" e a resposta da SAP.
-                tipo: String(linha.type ?? "")
-            }))
-            // Comentario sem texto viraria bolha em branco na conversa.
-            .filter((comentario) => comentario.texto);
+        if (!chamadoId) {
+            return req.reject(400, "Informe o ID do chamado para ler a conversa do caso.");
+        }
+
+        const inicio = Date.now();
+
+        // Identidade e perfil pela propria function Requisitante, nao por um SELECT novo: e ela que
+        // sabe resolver contato (ContactQueryByElements) x funcionario (EmployeeCollection) e
+        // devolver o contatoId que escopa o chamado. O e-mail NAO e o req.data.email cru: quem
+        // decide a identidade aqui e resolverEmailDoEscopoCasoSap (JWT na frente em producao),
+        // senao o proprio parametro do navegador escolheria de quem e a conversa lida. Vai CRU (sem
+        // toLowerCase): la dentro ele entra no EMailURI/Email do C4C, comparacoes exatas.
+        let requisitante;
+        try {
+            requisitante = await this.send("Requisitante", {
+                email: resolverEmailDoEscopoCasoSap(req)
+            });
+        } catch (erro) {
+            LOG.warn(`Falha ao identificar o requisitante da conversa do chamado ${chamadoId}: `
+                + `${erro.message}`);
+            return req.reject(502,
+                `Nao foi possivel identificar o requisitante: ${erro.message}`);
+        }
+
+        const contatoId = String(requisitante?.contatoId || "").trim();
+        // "funcionario" e o literal que o handler Requisitante devolve (ver o retorno do fallback
+        // pela EmployeeCollection); "contato" e o outro, e "" significa que ninguem achou o e-mail.
+        const ehFuncionario = String(requisitante?.origem || "").trim() === "funcionario";
+
+        // Falha fechada sem identidade: com contatoId vazio o SELECT sairia sem filtro de escopo e
+        // devolveria chamado de qualquer cliente do tenant. Vazio, nunca reject - mesmo desenho de
+        // ChamadosComMensagemNova.
+        if (!contatoId) {
+            LOG.warn(`Conversa do chamado ${chamadoId} sem requisitante identificado (JWT sem `
+                + `attr.email e sem e-mail no request, ou e-mail sem contato/funcionario): `
+                + `resposta vazia.`);
+            return vazio;
+        }
+
+        // Mesmo par do frontend: funcionario interno entra como executor, contato como
+        // requisitante.
+        const campoEscopo = ehFuncionario
+            ? CAMPO_ESCOPO_EXECUTOR_C4C
+            : CAMPO_ESCOPO_REQUISITANTE_C4C;
+
+        // O teste de dono e o PROPRIO where: ler por ID e conferir o dono depois deixaria a janela
+        // de trazer o chamado de outro cliente para a memoria do servidor. where e nao
+        // SELECT.one.from(E, {chave}): a key e o ObjectID, e o ID e Nullable no edmx.
+        const { ServiceRequestCollection } = ticketService.entities;
+        let linha;
+        try {
+            linha = linhasDaResposta(await ticketService.run(
+                SELECT.one.from(ServiceRequestCollection)
+                    .columns("ID", "ObjectID", "z_case_number_KUT", "z_id_sfm_KUT")
+                    .where({ ID: chamadoId, [campoEscopo]: contatoId })
+            ))[0];
+        } catch (erro) {
+            LOG.warn(`Falha ao reler o chamado ${chamadoId} (${campoEscopo}=${contatoId}): `
+                + `${erro.message}`);
+            return req.reject(erro.statusCode || 502,
+                `Nao foi possivel ler o chamado ${chamadoId}: ${erro.message}`);
+        }
+
+        // Nao e dono (ou o chamado nao existe): vazio SEM tocar na ALM. 404 nao muda nada para a
+        // tela e diria a quem sondar que o chamado existe.
+        if (!linha) {
+            LOG.warn(`Chamado ${chamadoId} fora do escopo de ${campoEscopo}=${contatoId}: `
+                + `conversa volta vazia sem consultar a ALM.`);
+            return vazio;
+        }
+
+        const caseNumber = String(linha.z_case_number_KUT ?? "").trim();
+        const correlationId = String(linha.z_id_sfm_KUT ?? "").trim();
+
+        // Sem os dois campos Z nao ha caso na ALM para ler - ausencia de campo custom e dado valido
+        // (o chamado nao foi encaminhado a SAP), nao erro. Exige os DOIS porque e assim que a tela
+        // monta a lista, e o header por caseNumber precisa de um e os comentarios do outro.
+        if (!caseNumber || !correlationId) {
+            LOG.warn(`Chamado ${chamadoId} sem z_case_number_KUT/z_id_sfm_KUT `
+                + `("${caseNumber}"/"${correlationId}"): nao ha caso na ALM para ler.`);
+            return vazio;
+        }
+
+        let calmItsmService;
+        try {
+            calmItsmService = await conectarCalmItsm();
+        } catch (erro) {
+            LOG.warn(`Falha ao conectar no SAP Cloud ALM para a conversa do chamado ${chamadoId}: `
+                + `${erro.message}`);
+            return req.reject(502, `Nao foi possivel conectar no SAP Cloud ALM: ${erro.message}`);
+        }
+
+        // Header SEM 'reporter': estes perfis nao tem S-User confiavel e o escopo ja foi feito no
+        // C4C (o chamado voltou no filtro do proprio usuario) - MEDIDO: sem reporter a ALM responde
+        // o caso normalmente.
+        // Ordem id -> caseNumber e nao o contrario: MEDIDO neste tenant que
+        // /supportcases/cases?caseNumber=<n> responde 428 PRECONDITION_REQUIRED ("Required request
+        // parameter 'id' ... is not present"), igual ao que o CALM_ITSM.json documenta (id e o unico
+        // filtro do endpoint). Tentar caseNumber primeiro custaria um round-trip perdido em TODO
+        // clique; ele fica como segunda tentativa para o dia em que a ALM aceitar o parametro.
+        // Header NAO derruba a conversa, e o log diz qual dos dois serviu.
+        let caso = null;
+        let headerPorOnde = "";
+        for (const filtro of [{ id: correlationId }, { caseNumber }]) {
+            const rotulo = filtro.caseNumber ? "caseNumber" : "id";
+            try {
+                const resposta = await lerCasosSapCru(calmItsmService, filtro);
+                // Por id o Case vem sem envelope (ver DetalheCasoSap); por caseNumber o formato nao
+                // e documentado, entao array e {results} tambem sao aceitos.
+                const achado = (Array.isArray(resposta) ? resposta[0]
+                    : Array.isArray(resposta?.results) ? resposta.results[0]
+                        : resposta) || null;
+
+                if (!achado || typeof achado !== "object"
+                    || (!achado.id && !achado.caseNumber)) {
+                    LOG.warn(`Header do caso ${caseNumber}/${correlationId} veio vazio por `
+                        + `${rotulo}.`);
+                    continue;
+                }
+
+                // Conferir a chave e a UNICA barreira deste GET: ele sai SEM 'reporter' (o escopo
+                // foi feito no C4C) e 'caseNumber' nao e filtro documentado no CALM_ITSM.json. Se o
+                // tenant ignorar o parametro nao suportado, ou se o campo Z do chamado apontar para
+                // outro caso, a ALM devolve um caso de OUTRO cliente e a tela mostraria o numero, o
+                // assunto e o status dele no cabecalho - com as bolhas certas, o que esconde o erro.
+                if (String(achado.caseNumber ?? "").trim() !== caseNumber
+                    && String(achado.id ?? "").trim() !== correlationId) {
+                    LOG.warn(`ALM devolveu o caso ${achado.caseNumber || "<sem numero>"}/`
+                        + `${achado.id || "<sem id>"} para o filtro ${rotulo} do caso `
+                        + `${caseNumber}/${correlationId}: header descartado.`);
+                    continue;
+                }
+
+                caso = achado;
+                headerPorOnde = rotulo;
+                break;
+            } catch (erro) {
+                LOG.warn(`Falha ao ler o header do caso ${caseNumber}/${correlationId} por `
+                    + `${rotulo}: ${erro.message}`);
+            }
+        }
+
+        // Comentarios sao o essencial da resposta, entao aqui e reject, igual a ComentariosCasoSap.
+        let respostaComentarios;
+        try {
+            respostaComentarios = await lerComentariosCasoSapCru(calmItsmService,
+                { id: correlationId });
+        } catch (erro) {
+            LOG.warn(`Falha ao ler os comentarios do caso ${correlationId} `
+                + `(chamado ${chamadoId}): ${erro.message}`);
+            return req.reject(502,
+                `Nao foi possivel consultar os comentarios do caso: ${erro.message}`);
+        }
+
+        const conversa = comentariosCasoSapComoResposta(respostaComentarios);
+        const texto = (valor) => String(valor ?? "");
+
+        LOG.info(`Conversa do chamado ${chamadoId} (caso ${caseNumber}/${correlationId}, escopo `
+            + `${campoEscopo}=${contatoId}): header por ${headerPorOnde || "nenhum"}, `
+            + `${conversa.exibidos}/${conversa.total} comentarios em ${Date.now() - inicio} ms.`);
+
+        return {
+            // Eco dos campos Z do CHAMADO, nao do payload da ALM: sao eles que identificam o
+            // caso na tela, e header que falhou nao pode zerar essa identificacao.
+            correlationId,
+            caseNumber: texto(caso?.caseNumber) || caseNumber,
+            subject: texto(caso?.subject),
+            status: texto(caso?.status),
+            priority: texto(caso?.priority),
+            customerNumber: texto(caso?.customerNumber),
+            createdAt: texto(caso?.createdAt),
+            updatedAt: texto(caso?.updatedAt),
+            headerFalha: !caso,
+            ...conversa
+        };
+    });
+
+    // Enriquecimento em LOTE da lista do "Chat com SAP" (funcional e requisitante): a tela ja
+    // pintou as linhas com o dado do CHAMADO (numero do campo Z, titulo e data de abertura) e
+    // este handler devolve o que so a ALM sabe - numero, assunto e data da ultima mensagem do
+    // CASO. A tela nao manda correlationId nenhum, pelo mesmo motivo de
+    // ConversaCasoSapDoChamado: id vindo do navegador leria caso de outro cliente do tenant.
+    // Custo: 2 GETs na ALM por caso, com teto, 6 em paralelo e cache por correlationId.
+    this.on("ConversasCasoSapDoRequisitante", async (req) => {
+        const vazio = { total: 0, exibidos: 0, truncado: false, falha: false, conversas: [] };
+        const inicio = Date.now();
+
+        // 1) IDENTIDADE - identica a ConversaCasoSapDoChamado: quem decide de quem e a lista e
+        // resolverEmailDoEscopoCasoSap (JWT na frente em producao), nunca o req.data.email cru.
+        let requisitante;
+        try {
+            requisitante = await this.send("Requisitante", {
+                email: resolverEmailDoEscopoCasoSap(req)
+            });
+        } catch (erro) {
+            LOG.warn(`Falha ao identificar o requisitante das conversas SAP: ${erro.message}`);
+
+            // A tela ja esta pintada com o fallback: envelope vazio, nunca reject.
+            return { ...vazio, falha: true, conversas: [] };
+        }
+
+        const contatoId = String(requisitante?.contatoId || "").trim();
+        // "funcionario" e o literal que o handler Requisitante devolve; "contato" e o outro.
+        const ehFuncionario = String(requisitante?.origem || "").trim() === "funcionario";
+
+        // Falha fechada sem identidade: contatoId vazio tiraria o filtro de escopo do SELECT e a
+        // varredura leria chamado de qualquer cliente do tenant.
+        if (!contatoId) {
+            LOG.warn("Conversas SAP sem requisitante identificado (JWT sem attr.email e sem "
+                + "e-mail no request, ou e-mail sem contato/funcionario): resposta vazia.");
+            return { ...vazio, conversas: [] };
+        }
+
+        // Mesmo par do frontend: funcionario interno entra como executor, contato como
+        // requisitante.
+        const campoEscopo = ehFuncionario
+            ? CAMPO_ESCOPO_EXECUTOR_C4C
+            : CAMPO_ESCOPO_REQUISITANTE_C4C;
+
+        // 2) CHAMADOS DO USUARIO QUE TEM CASO NA ALM. O filtro pelo campo custom foi MEDIDO neste
+        // tenant ($filter=z_id_sfm_KUT ne '' responde 200): sem ele esta varredura leria os
+        // chamados todos do usuario para achar um punhado. z minusculo - Z_ maiusculo faz o C4C
+        // recusar a requisicao inteira. Paginacao e anti-loop no molde de
+        // ClientesDistintosChamados (o orderBy nao e opcional: sem ele o $skip do C4C repete
+        // linha).
+        const { ServiceRequestCollection } = ticketService.entities;
+        const candidatos = [];
+        // Dedupe pelo ObjectID e nao pelo ID: ID e Nullable no edmx.
+        const vistos = new Set();
+        let linhasLidas = 0;
+        let paginas = 0;
+        let concluido = false;
+        let primeiroDaPaginaAnterior = "";
+        let falhaVarredura = false;
+
+        try {
+            while (paginas < MAXIMO_PAGINAS_CHAMADOS_C4C) {
+                const linhas = linhasDaResposta(await ticketService.run(
+                    SELECT.from(ServiceRequestCollection)
+                        .columns("ID", "ObjectID", "CreationDateTime", "z_case_number_KUT",
+                            "z_id_sfm_KUT")
+                        .where({ [campoEscopo]: contatoId, z_id_sfm_KUT: { "!=": "" } })
+                        // ID desc so PAGINA (unico, e a chave estavel que o $skip exige); ID e
+                        // String no C4C, entao quem ordena o corte do teto e CreationDateTime.
+                        .orderBy("ID desc")
+                        .limit(LIMITE_CHAMADOS_C4C, linhasLidas)
+                ));
+
+                paginas += 1;
+                linhasLidas += linhas.length;
+
+                for (const linha of linhas) {
+                    const chave = String(linha?.ObjectID ?? "").trim()
+                        || String(linha?.ID ?? "").trim();
+                    const chamadoId = String(linha?.ID ?? "").trim();
+                    const correlationId = String(linha?.z_id_sfm_KUT ?? "").trim();
+                    const caseNumber = String(linha?.z_case_number_KUT ?? "").trim();
+
+                    // Exige os DOIS campos Z, igual a ConversaCasoSapDoChamado, e o ID: e ele a
+                    // chave de casamento com a linha que a tela ja pintou.
+                    if (!chave || !chamadoId || !correlationId || !caseNumber) continue;
+                    if (vistos.has(chave)) continue;
+
+                    vistos.add(chave);
+                    // criadoEm em ms: chamado sem data cai para 0 e fica no fim do corte.
+                    candidatos.push({
+                        chamadoId,
+                        correlationId,
+                        criadoEm: paraMs(linha?.CreationDateTime) ?? 0
+                    });
+                }
+
+                const primeiro = String(linhas[0]?.ObjectID ?? linhas[0]?.ID ?? "");
+                const paginaRepetida = Boolean(primeiro)
+                    && primeiro === primeiroDaPaginaAnterior;
+                primeiroDaPaginaAnterior = primeiro;
+
+                // Pagina vazia e o unico fim confiavel: pagina curta tambem pode ser teto do
+                // tenant.
+                if (!linhas.length) {
+                    concluido = true;
+                    break;
+                }
+
+                // Pagina repetida e $skip ignorado: o resto ficou sem ler, logo truncado.
+                if (paginaRepetida) {
+                    LOG.warn("ServiceRequestCollection devolveu a mesma pagina duas vezes na "
+                        + `varredura das conversas SAP (offset ${linhasLidas - linhas.length}); `
+                        + "varredura encerrada.");
+                    break;
+                }
+
+                if (linhasLidas >= MAXIMO_TOTAL_CHAMADOS_C4C) break;
+            }
+        } catch (erro) {
+            LOG.warn(`Falha ao varrer os chamados com caso SAP (${campoEscopo}=${contatoId}): `
+                + erro.message);
+            falhaVarredura = true;
+
+            // Parcial ainda enriquece as linhas que ja apareceram; sem candidato nao ha o que ler.
+            if (!candidatos.length) return { ...vazio, falha: true, conversas: [] };
+        }
+
+        const total = candidatos.length;
+        if (!total) return { ...vazio, conversas: [] };
+
+        // 3) TETO. Cortar na ordem da varredura (ID desc, lexicografica) gastaria o teto em chamados
+        // velhos e deixaria o topo da tela, que e CreationDateTime desc, todo no fallback.
+        candidatos.sort((a, b) => b.criadoEm - a.criadoEm);
+        const selecionados = candidatos.slice(0, MAXIMO_CONVERSAS_ENRIQUECIDAS_SAP);
+        const truncado = falhaVarredura || !concluido || total > selecionados.length;
+
+        let calmItsmService;
+        try {
+            calmItsmService = await conectarCalmItsm();
+        } catch (erro) {
+            LOG.warn(`Falha ao conectar no SAP Cloud ALM para as conversas SAP: ${erro.message}`);
+            return { total, exibidos: 0, truncado, falha: true, conversas: [] };
+        }
+
+        // 4) ENRIQUECIMENTO. Posicao fixa (os trabalhadores terminam fora de ordem) e indice
+        // compartilhado, igual a ChamadosComMensagemNova. 6 em paralelo: e o mesmo knob de 429 da
+        // ALM, e a concorrencia MEDIDA sem 429 neste tenant.
+        const conversas = new Array(selecionados.length).fill(null);
+        let proximo = 0;
+
+        await emParalelo(LOTES_SIMULTANEOS_CHAMADOS_SAP, selecionados.length, async () => {
+            while (proximo < selecionados.length) {
+                const indice = proximo;
+                proximo += 1;
+
+                const { chamadoId, correlationId } = selecionados[indice];
+                const dados = await enriquecerConversaCasoSap(calmItsmService, correlationId,
+                    `chamado ${chamadoId}`);
+
+                conversas[indice] = { chamadoId, ...dados };
+            }
+        });
+
+        const exibidos = conversas.filter((conversa) => conversa && !conversa.falha).length;
+
+        LOG.info(`Conversas SAP de ${campoEscopo}=${contatoId}: ${exibidos}/${total} enriquecidos `
+            + `(${conversas.length} lidos, truncado=${truncado}) em ${Date.now() - inicio} ms.`);
 
         return {
             total,
-            // Compara com a PAGINA lida, nao com exibidos: comentario vazio filtrado encurta a
-            // lista sem que a ALM tenha escondido nada.
-            truncado: total > linhas.length,
-            exibidos: comentarios.length,
-            comentarios
+            exibidos,
+            truncado,
+            falha: falhaVarredura || conversas.some((conversa) => conversa && conversa.falha),
+            // Caso com falha SOBE na resposta, com os campos vazios: e assim que a tela sabe
+            // manter o fallback do chamado naquela linha em vez de apaga-la.
+            conversas: conversas.filter(Boolean)
         };
     });
 
@@ -2528,6 +3202,369 @@ module.exports = cds.service.impl(async function () {
         return {
             correlationId: idCaso,
             comentario: { texto, quando, autor: sUser, tipo: TIPO_COMENTARIO_CLIENTE_SAP }
+        };
+    });
+
+    // Lista de anexos do caso: um GET por abertura do detalhe, mesma chave do chat (o
+    // correlationId, nunca o caseNumber). Leitura, entao aqui nao ha nada a deduplicar.
+    this.on("AnexosCasoSap", async (req) => {
+        const correlationId = String(req.data.correlationId || "").trim();
+        const sUser = String(req.data.sUser || "").trim();
+        const vazio = { total: 0, exibidos: 0, truncado: false, anexos: [] };
+
+        if (!correlationId) {
+            return req.reject(400,
+                "Informe o correlationId do caso para ler os anexos.");
+        }
+
+        // Mesma regra de ComentariosCasoSap: sem reporter a ALM escolheria o escopo sozinha e
+        // devolveria anexo de caso de outro usuario; vazio e melhor que consulta aberta.
+        if (!sUser) {
+            LOG.warn(`Anexos do caso ${correlationId} sem S-User: lista volta vazia.`);
+            return vazio;
+        }
+
+        // limit explicito: sem ele vale o default nao documentado do servidor.
+        const parametros = new URLSearchParams({
+            id: correlationId,
+            reporter: sUser,
+            limit: String(LIMITE_ANEXOS_CASO_SAP)
+        });
+
+        let resposta;
+        try {
+            const calmItsmService = await conectarCalmItsm();
+            resposta = await calmItsmService.send({
+                method: "GET",
+                path: `/supportcases/cases/attachments?${parametros}`
+            });
+        } catch (erro) {
+            LOG.warn(`Falha ao ler os anexos do caso ${correlationId} `
+                + `(S-User ${sUser}): ${erro.message}`);
+            return req.reject(502,
+                `Nao foi possivel consultar os anexos do caso: ${erro.message}`);
+        }
+
+        const linhas = Array.isArray(resposta?.results) ? resposta.results : [];
+
+        const anexos = linhas
+            .map((linha) => ({
+                // idAttachment e a unica chave do download; sem ela a linha nunca baixa.
+                idAnexo: String(linha.idAttachment ?? "").trim(),
+                nome: String(linha.fileName ?? "").trim(),
+                descricao: String(linha.description ?? ""),
+                // Normalizado: a ALM manda "pdf" ou "application/pdf" no mesmo campo, e a tela usa
+                // este valor como type do Blob no download.
+                contentType: mimeTypeDoAnexoDaAlm(linha.contentType, linha.fileName),
+                url: String(linha.url ?? ""),
+                // Datas cruas da ALM: o parse mora no frontend, como no resto do app.
+                criadoEm: String(linha.createdAt ?? ""),
+                criadoPor: String(linha.createdBy ?? "")
+            }))
+            .filter((anexo) => anexo.idAnexo);
+
+        if (anexos.length < linhas.length) {
+            LOG.warn(`Caso ${correlationId}: ${linhas.length - anexos.length} anexo(s) sem `
+                + `idAttachment ficaram fora da lista (nao teriam download).`);
+        }
+
+        // O envelope traz um count que e o tamanho da propria pagina: quem responde "faltou
+        // anexo?" e o totalCount contra a PAGINA lida, nao contra exibidos.
+        const total = Number(resposta?.totalCount ?? linhas.length);
+
+        return {
+            total,
+            truncado: total > linhas.length,
+            exibidos: anexos.length,
+            anexos
+        };
+    });
+
+    // Download do binario: sai por function porque o adapter V4 apagaria coluna binaria do $select
+    // antes do handler (mesmo motivo de ConteudoAnexo, do C4C).
+    this.on("AnexoCasoSapConteudo", async (req) => {
+        const idAnexo = String(req.data.idAnexo || "").trim();
+        const sUser = String(req.data.sUser || "").trim();
+        const nome = String(req.data.nome || "").trim();
+
+        if (!idAnexo) {
+            return req.reject(400,
+                "Informe o identificador do anexo para baixar o arquivo.");
+        }
+
+        // Diferente da listagem: sem reporter o GET do binario devolve 428, entao nada de vazio.
+        if (!sUser) {
+            return req.reject(400,
+                "Informe o S-User do requisitante para baixar o anexo.");
+        }
+
+        const parametros = new URLSearchParams({ idAttachment: idAnexo, reporter: sUser });
+
+        let resposta;
+        try {
+            const calmItsmService = await conectarCalmItsm();
+            // Sem base64Encoded e com _binary: o send() do CAP devolve so response.data, entao o
+            // header X-Base64Encoded seria inacessivel e nao daria para saber a codificacao do
+            // corpo. Bytes crus + toString("base64") aqui e deterministico; _binary liga o
+            // responseType arraybuffer, sem o qual o axios tentaria JSON.parse e corromperia.
+            resposta = await calmItsmService.send({
+                // accept proprio: o default do CAP e "application/json,text/plain" (query.js) e este
+                // endpoint produz SO application/octet-stream - gateway que honre o Accept devolveria
+                // 406. "*/*" e nao "application/octet-stream" de proposito: o Service.js do CAP troca
+                // o responseType para "stream" quando o accept casa /stream|image|pdf|tar/, e ai o
+                // Buffer.isBuffer abaixo falharia e o anexo desceria corrompido.
+                headers: { accept: "*/*" },
+                method: "GET",
+                path: `/supportcases/attachment?${parametros}`,
+                _binary: true
+            });
+        } catch (erro) {
+            // O cliente rest do CAP embrulha tudo em statusCode 502 e joga a resposta original em
+            // reason: ler erro.status/erro.response aqui daria 502 em toda falha (client.js:200).
+            const respostaErro = erro?.reason?.response;
+            const mensagem = mensagemDeErroDaAlm(respostaErro, erro);
+            LOG.warn(`Falha ao baixar o anexo ${idAnexo} `
+                + `(reporter ${sUser}, nome ${nome || "(sem nome)"}): ${mensagem}`);
+
+            const status = Number(respostaErro?.status ?? erro?.status ?? 0);
+
+            if (status === 400 || status === 428) {
+                return req.reject(400,
+                    `SAP Cloud ALM recusou a leitura do anexo: ${mensagem}`);
+            }
+
+            if (status === 429) {
+                return req.reject(429,
+                    "SAP Cloud ALM esta limitando as requisicoes. Aguarde e tente novamente.");
+            }
+
+            return req.reject(502,
+                `Nao foi possivel baixar o anexo do SAP Cloud ALM: ${mensagem}`);
+        }
+
+        // Fallback so existe se algum executor devolver string: latin1 preserva 1 byte por char.
+        const buffer = Buffer.isBuffer(resposta)
+            ? resposta
+            : Buffer.from(String(resposta ?? ""), "latin1");
+
+        if (buffer.length === 0) {
+            LOG.warn(`Anexo ${idAnexo} (reporter ${sUser}) voltou com corpo vazio da ALM.`);
+            return req.reject(502, "SAP Cloud ALM devolveu o anexo vazio.");
+        }
+
+        // mimeType vazio de proposito: o header da resposta nao chega ao send(), entao a tela usa
+        // o contentType que veio da listagem.
+        return { nome, mimeType: "", base64: buffer.toString("base64") };
+    });
+
+    // Envio de anexo: DOIS POSTs em sequencia, um arquivo por chamada. O passo (a) sobe o binario
+    // para o Document Service e devolve a url; o (b) vincula essa url ao caso. Nenhum dos dois tem
+    // chave de deduplicacao, entao NUNCA reenviar - nem apos falha, nem em timeout.
+    this.on("EnviarAnexoCasoSap", async (req) => {
+        const correlationId = String(req.data.correlationId || "").trim();
+        const sUser = String(req.data.sUser || "").trim();
+        const installationNumber = String(req.data.installationNumber || "").trim();
+        const nome = String(req.data.nome || "").trim();
+        const descricao = String(req.data.descricao ?? "").trim();
+        const base64 = String(req.data.base64 ?? "").trim();
+
+        // send() cru nao passa pela validacao do CAP: sem isto a ALM devolve 400/428 generico.
+        if (!correlationId) {
+            return req.reject(400,
+                "Informe o correlationId do caso para enviar o anexo.");
+        }
+
+        if (!sUser) {
+            return req.reject(400,
+                "Informe o S-User do requisitante para enviar o anexo.");
+        }
+
+        // installation e required no POST do binario: vazio toma 400 sem dizer qual campo faltou.
+        if (!installationNumber) {
+            return req.reject(400, "Informe o numero da instalacao do ambiente: a SAP exige "
+                + "installation para receber anexo.");
+        }
+
+        if (!nome) {
+            return req.reject(400, "Informe o nome do arquivo do anexo.");
+        }
+
+        if (!base64) {
+            return req.reject(400, "O arquivo do anexo chegou vazio; escolha o arquivo de novo.");
+        }
+
+        // Extensao fora da lista da SAP Note 1277146: a ALM responde 200 com url e descarta o
+        // arquivo em silencio, entao recusar aqui e a unica forma de a tela saber.
+        const extensao = extensaoDoNomeAnexo(nome);
+
+        if (EXTENSOES_ANEXO_CASO_SAP.indexOf(extensao) < 0) {
+            return req.reject(400, `A SAP Cloud ALM nao aceita anexo do tipo ".${extensao}" e `
+                + `descartaria o arquivo em silencio.`);
+        }
+
+        // Aritmetica e nao Buffer.from: decodificar duplicaria 10 MB na memoria so para medir.
+        const tamanhoBytes = Math.floor(
+            base64.replace(/[\r\n]/g, "").replace(/=+$/, "").length * 3 / 4);
+
+        if (tamanhoBytes > TAMANHO_MAXIMO_ANEXO_CASO_SAP_BYTES) {
+            return req.reject(400, `O arquivo passa de `
+                + `${TAMANHO_MAXIMO_ANEXO_CASO_SAP_BYTES / (1024 * 1024)} MB; escolha um arquivo `
+                + `menor.`);
+        }
+
+        // Os tres campos do array do passo (b) sao required: description vazia toma 400.
+        const descricaoFinal = descricao || nome;
+
+        const { limite, corpo } = montarMultipartAnexoSap({
+            installation: installationNumber,
+            nome,
+            tipo: extensao,
+            descricao: descricaoFinal,
+            base64
+        });
+
+        // Trava igual as irmas (SAP_ABRIR/SAP_COMENTAR): so a flag simula. Default invertido em dev
+        // ja custou caso REAL sem anexo; cuidado que o cds watch local fala com o tenant PRODUTIVO.
+        if (process.env.SAP_ANEXAR_CASO_SIMULADO === "1") {
+            // Nunca logar o base64: sao ~13 MB por arquivo.
+            LOG.warn(`Modo simulado de anexo no caso SAP ${correlationId}: nenhuma chamada a ALM. `
+                + `Arquivo ${nome} (.${extensao}, ${tamanhoBytes} bytes), installation `
+                + `${installationNumber}, corpo multipart de ${corpo.length} bytes.`);
+            return {
+                correlationId,
+                anexo: {
+                    idAnexo: "",
+                    nome,
+                    descricao: descricaoFinal,
+                    contentType: "",
+                    url: `simulado://anexo/${extensao}`,
+                    criadoEm: agoraNoFormatoDaAlm(),
+                    criadoPor: sUser
+                }
+            };
+        }
+
+        // Debug do log "remote" com este corpo derruba o processo antes de o POST sair: o
+        // _logRequest do cliente do CAP faz Object.keys(requestConfig.data) e, com
+        // NODE_ENV=production, deepSanitize em cima - num Buffer de ~14 MB sao 14 milhoes de chaves
+        // (MEDIDO: 1,3 s e 430 MB so nessa linha). Recusar o envio com mensagem clara e melhor que
+        // estourar a memoria do container e derrubar a app inteira para todos os usuarios.
+        if (cds.log("remote")._debug) {
+            LOG.warn(`Envio do anexo ${nome} recusado: o log 'remote' esta em debug e o corpo `
+                + `multipart de ${corpo.length} bytes seria logado byte a byte.`);
+            return req.reject(503, "O log 'remote' esta em modo debug e o envio de anexo foi "
+                + "bloqueado para nao esgotar a memoria do servidor. Desligue o debug e tente "
+                + "novamente.");
+        }
+
+        let calmItsmService;
+        let resposta;
+        try {
+            calmItsmService = await conectarCalmItsm();
+            // Buffer cru + content-type proprio: o send() nao serializa Buffer e calcula o
+            // content-length sozinho. Objeto plano com multipart faria o axios gerar OUTRO
+            // boundary, e o corpo ja montado nao casaria com ele.
+            resposta = await calmItsmService.send({
+                method: "POST",
+                path: "/supportcases/attachment?base64Encoded=true",
+                data: corpo,
+                headers: { "content-type": `multipart/form-data; boundary=${limite}` }
+            });
+        } catch (erro) {
+            // O cliente rest do CAP embrulha tudo em statusCode 502 e joga a resposta original em
+            // reason: ler erro.status/erro.response aqui daria 502 em toda falha (client.js:200).
+            const respostaErro = erro?.reason?.response;
+            const mensagem = mensagemDeErroDaAlm(respostaErro, erro);
+            LOG.warn(`Falha ao subir o arquivo ${nome} do caso ${correlationId} `
+                + `(installation ${installationNumber}, ${tamanhoBytes} bytes): ${mensagem}`);
+
+            const status = Number(respostaErro?.status ?? erro?.status ?? 0);
+
+            // Nunca reenviar apos falha, nem em timeout: o POST do anexo nao tem chave de
+            // deduplicacao, e o arquivo pode ja estar no Document Service.
+            if (status === 400 || status === 428) {
+                return req.reject(400,
+                    `SAP Cloud ALM recusou o arquivo ${nome}: ${mensagem}`);
+            }
+
+            if (status === 429) {
+                return req.reject(429,
+                    "SAP Cloud ALM esta limitando as requisicoes. Aguarde e tente novamente.");
+            }
+
+            return req.reject(502,
+                `Nao foi possivel enviar o arquivo ${nome} ao SAP Cloud ALM: ${mensagem}`);
+        }
+
+        const urlDocumento = String(resposta?.url ?? "").trim();
+
+        if (!urlDocumento) {
+            LOG.warn(`SAP Cloud ALM aceitou o arquivo ${nome} (caso ${correlationId}, installation `
+                + `${installationNumber}) mas nao devolveu a url do documento.`);
+            return req.reject(502, "SAP Cloud ALM aceitou o arquivo mas nao devolveu a URL do "
+                + "documento; o anexo nao foi vinculado ao caso.");
+        }
+
+        let respostaVinculo;
+        try {
+            const parametros = new URLSearchParams({ id: correlationId, reporter: sUser });
+            // Corpo vai em data e como objeto: aqui o CAP serializa e marca application/json.
+            respostaVinculo = await calmItsmService.send({
+                method: "POST",
+                path: `/supportcases/cases/attachments?${parametros}`,
+                data: [{ fileName: nome, description: descricaoFinal, url: urlDocumento }]
+            });
+        } catch (erro) {
+            const respostaErro = erro?.reason?.response;
+            const mensagem = mensagemDeErroDaAlm(respostaErro, erro);
+            const status = Number(respostaErro?.status ?? erro?.status ?? 0);
+
+            // Nunca reexecutar o passo (a): o binario ja subiu e um retry duplicaria o documento.
+            if (status === 400 || status === 428) {
+                LOG.warn(`Vinculo do arquivo ${nome} ao caso ${correlationId} recusado: `
+                    + `${mensagem}`);
+                return req.reject(400,
+                    `SAP Cloud ALM recusou o vinculo do arquivo ${nome} ao caso: ${mensagem}`);
+            }
+
+            if (status === 429) {
+                LOG.warn(`Vinculo do arquivo ${nome} ao caso ${correlationId} barrado por limite `
+                    + `de requisicoes; o arquivo ficou orfao no Document Service.`);
+                return req.reject(429,
+                    "SAP Cloud ALM esta limitando as requisicoes. Aguarde e tente novamente.");
+            }
+
+            LOG.warn(`Arquivo ${nome} subiu para o Document Service (${urlDocumento}) mas o `
+                + `vinculo ao caso ${correlationId} nao foi confirmado: pode ter ficado ORFAO na `
+                + `SAP - ou vinculado sem a resposta chegar. ${mensagem}`);
+            // Desfecho INDETERMINADO (timeout/5xx): diferente das recusas acima, o vinculo pode ter
+            // sido gravado na ALM sem a resposta voltar. A mensagem nao pode convidar ao reenvio
+            // cego - sem chave de deduplicacao e sem DELETE de anexo na API, repetir duplicaria o
+            // arquivo no caso para sempre.
+            return req.reject(502, `Nao houve confirmacao do vinculo do arquivo ${nome} ao caso `
+                + `${correlationId}: ele PODE ja estar anexado. Confira a lista de anexos do caso `
+                + `antes de enviar de novo. ${mensagem}`);
+        }
+
+        // Id vazio nao desfaz o vinculo: ecoar a chave e melhor que a tela dizer que nao enviou.
+        const idCaso = String(respostaVinculo?.id ?? "").trim() || correlationId;
+
+        LOG.info(`Anexo enviado ao caso SAP ${idCaso}: ${nome} (.${extensao}, ${tamanhoBytes} `
+            + `bytes, reporter ${sUser}, installation ${installationNumber}).`);
+
+        return {
+            correlationId: idCaso,
+            // idAnexo vazio: o vinculo devolve so o id do CASO. Quem quiser o idAttachment rele a
+            // listagem (AnexosCasoSap), que e o que a tela faz depois do envio.
+            anexo: {
+                idAnexo: "",
+                nome,
+                descricao: descricaoFinal,
+                contentType: "",
+                url: urlDocumento,
+                criadoEm: agoraNoFormatoDaAlm(),
+                criadoPor: sUser
+            }
         };
     });
 

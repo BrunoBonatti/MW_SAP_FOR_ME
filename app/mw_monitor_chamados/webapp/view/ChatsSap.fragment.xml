@@ -7,10 +7,13 @@
          funcionalidades; o que muda: ids com sufixo "Sap", handlers *Sap no Main.controller.js e
          estado proprio no modelo "view" (/chatListaSap, /chatSelecionadoSap, /chatMensagensSap,
          /chatCarregandoSap) - sem isso, selecionar uma conversa aqui trocaria a conversa aberta na
-         tela Chats tambem. A lista NAO e mock: nasce dos casos SAP reais - _espelharCasosSapNoChat
-         mapeia tickets>/TicketsSap (a MESMA carga da tela Acompanhar chamados SAP) para
-         /chatListaSap - e a conversa vem dos comentarios do caso na Cloud ALM
-         (/ComentariosCasoSap). Os nomes dos campos continuam sendo os do mock (nome,
+         tela Chats tambem. A lista NAO e mock: nasce dos casos SAP reais, por DUAS fontes que
+         _montarChatListaSap escolhe pelo perfil - _espelharCasosSapNoChat mapeia
+         tickets>/TicketsSap (a MESMA carga da tela Acompanhar chamados SAP, escopada por S-User, so
+         o BASIS) e _derivarChatListaSapDosChamados mapeia os chamados do C4C que tem os campos
+         custom do caso (funcional e requisitante, que nao tem S-User). A conversa vem dos
+         comentarios do caso na Cloud ALM nas duas (/ComentariosCasoSap por S-User,
+         /ConversaCasoSapDoChamado pelo chamado). Os nomes dos campos continuam sendo os do mock (nome,
          ultimaMensagem, dataHora, naoLidas) de proposito: e o que mantem este markup e o de
          Chats.fragment.xml identicos. -->
     <!-- Master/detail proprio: a coluna da lista (chatsColunaLista) e a coluna da conversa
@@ -67,11 +70,17 @@
                         baseSize="0%"
                         minHeight="0rem"/>
                 </layoutData>
+                <!-- busy proprio da COLUNA: o numero, o assunto e a data de cada linha vem da
+                     ALM (2 GETs por caso), e publicar antes disso mostrava o dado do chamado e o
+                     corrigia sozinho segundos depois. Com busyIndicatorDelay 0 o indicador aparece
+                     no mesmo quadro em que a lista e esvaziada, sem piscar o noDataText. -->
                 <List
                     id="chatsListSap"
                     mode="SingleSelectMaster"
                     selectionChange=".onChatSelectSap"
                     items="{view>/chatListaSap}"
+                    busy="{= ${view>/chatListaSapCarregando} === true }"
+                    busyIndicatorDelay="0"
                     noDataText="{i18n>chatsSapListaVazia}"
                     showSeparators="Inner"
                     class="mwListZebra">
@@ -442,15 +451,19 @@
                          barra custom: o FeedInput nao tem anexo, e era uma acao "em
                          construcao". -->
                     <!-- enabled cai no envio (POST da ALM sem deduplicacao) e na leitura
-                         (releitura em voo descartaria ou duplicaria a bolha do envio). -->
+                         (releitura em voo descartaria ou duplicaria a bolha do envio), e agora
+                         tambem no PERFIL: so o BASIS escreve no caso: funcional e requisitante leem
+                         a conversa pelo chamado (ConversaCasoSapDoChamado) e nao tem S-User para o
+                         POST. O enabled e cosmetico - a recusa de verdade esta em
+                         _enviarComentarioDoChatSap. -->
                     <!-- maxLength espelha o teto do backend, senao so a recusa da ALM o revela. -->
                     <FeedInput
                         id="chatsFeedInputSap"
                         icon="sap-icon://employee"
-                        placeholder="{i18n>chatsMensagemPlaceholder}"
+                        placeholder="{= ${view>/requisitanteEhFuncionarioBasis} === true ? ${i18n>chatsMensagemPlaceholder} : ${i18n>chatsSapSomenteLeitura} }"
                         buttonTooltip="{i18n>chatsEnviarTooltip}"
                         maxLength="5000"
-                        enabled="{= ${view>/chatEnviandoSap} !== true &amp;&amp; ${view>/chatCarregandoSap} !== true }"
+                        enabled="{= ${view>/requisitanteEhFuncionarioBasis} === true &amp;&amp; ${view>/chatEnviandoSap} !== true &amp;&amp; ${view>/chatCarregandoSap} !== true }"
                         post=".onChatEnviarMensagemSap">
                         <layoutData>
                             <FlexItemData

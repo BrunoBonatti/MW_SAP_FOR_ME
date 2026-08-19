@@ -913,6 +913,14 @@ service ticket {
     @sap.updatable : 'true'
     @sap.filterable : 'true'
     Z_COMPONENT_SFM_KUT : String(40);
+    @sap.creatable : 'true'
+    @sap.updatable : 'true'
+    @sap.filterable : 'true'
+    z_case_number_KUT : String(40);
+    @sap.creatable : 'true'
+    @sap.updatable : 'true'
+    @sap.filterable : 'true'
+    z_id_sfm_KUT : String(80);
     ServiceRequestAttachmentFolder : Association to many ServiceRequestAttachmentFolderCollection {  };
     ServiceRequestBusinessTransactionDocumentReference : Association to many ServiceRequestBusinessTransactionDocumentReferenceCollection {  };
     ServiceRequestHistoricalVersion : Association to many ServiceRequestHistoricalVersionCollection {  };
